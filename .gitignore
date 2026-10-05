@@ -1,0 +1,18 @@
+/target
+
+# Local working notes (Russian) and agent instructions: never published
+/docs/superpowers/
+/docs/internal/
+/CLAUDE.md
+/memory.md
+
+# Wallet data and secrets must never be committed
+/data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.age
+*.seed
+.env
+.env.*

@@ -1,0 +1,10 @@
+[package]
+name = "zaw"
+version = "0.1.0"
+edition = "2024"
+description = "A shielded Zcash wallet for AI agents, exposed over MCP"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Sofiia7/zec-agent-wallet"
+publish = false
+
+[dependencies]
