@@ -1,18 +1,23 @@
 # zec-agent-wallet
 
-A shielded Zcash wallet for AI agents, exposed over the Model Context Protocol (MCP). Working name.
+A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded ZEC over the Model Context Protocol (MCP), without handing the model your keys, addresses or the messages your counterparties write. Working name.
 
-**Status:** early development for ZECATHON (October 2026). Not ready for real funds.
+**Status:** early development for ZECATHON (October 2026). Nothing below works yet: this describes planned behavior. Not ready for real funds.
 
-## Idea
+## Planned behavior
 
-An AI agent should be able to pay and get paid in shielded ZEC without telling the model provider who pays whom, and without being talked into paying more than its owner agreed to.
-
-- The model works with contact names, amounts and statuses. It never sees addresses, keys, memo text or transaction ids.
-- The wallet pays on its own only what the owner approved in advance: the same amount, to the same saved address, within limits.
-- Everything else waits for the owner in a local approval window protected by a PIN.
+- The owner approves a specific bill: recipient, amount, fee cap and deadline. The agent can pay that bill later, once, exactly as approved. Everything else waits for the owner.
+- The wallet never sends the model keys, addresses, transaction ids or text written by counterparties (memo, label, message). The model sees contact aliases, bill labels, amounts in ZEC with approximate USD, and statuses.
+- Retries, timeouts and crashes never turn into a second payment.
+- Orchard-only shielded payments in the first version.
 - A built-in light client: no Zcash node of your own is needed.
+
+## What it does not promise
+
+- The aliases, labels and amounts the model does see reach the model provider. The agent may also learn things from its other tools (email, browser).
+- An agent that can run shell commands or read files as the same OS user (for example a coding agent) can read the wallet's local data. If your agent can run commands, run the wallet daemon as a separate OS user.
+- A light client trusts its lightwalletd server for chain data, and the server sees your IP address.
 
 ## License
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+MIT, see [LICENSE](LICENSE).

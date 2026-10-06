@@ -11,7 +11,9 @@
 *.sqlite
 *.sqlite3
 *.db
-*.db-journal
+*-journal
+*-wal
+*-shm
 *.age
 *.seed
 .env
