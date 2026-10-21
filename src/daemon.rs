@@ -1216,7 +1216,10 @@ fn record_password_result(d: &Daemon, ok: bool) {
         + 1;
     let _ = d.store.set_kv("login_failures", &failures.to_string());
     if failures >= 3 {
-        let delay = 2i64.pow((failures - 3).min(10)).min(900);
+        // Behind a public host, anyone can fail logins; a long global delay would let
+        // them lock the owner out. The public playground uses a long random password.
+        let cap = if d.secure_cookies { 30 } else { 900 };
+        let delay = 2i64.pow((failures - 3).min(10)).min(cap);
         let _ = d
             .store
             .set_kv("login_blocked_until", &(now() + delay).to_string());

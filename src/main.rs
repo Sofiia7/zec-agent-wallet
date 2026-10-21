@@ -30,6 +30,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Create a new wallet: choose a password and write down the 24 words once.
+    Init {
+        #[arg(long)]
+        lightwalletd: Option<String>,
+    },
     /// Run the wallet daemon: sync, payments, the owner window and the agent API.
     Daemon {
         #[arg(long, default_value = "127.0.0.1:7341")]
@@ -90,6 +95,59 @@ fn default_data_dir(network: Net) -> anyhow::Result<PathBuf> {
     }))
 }
 
+/// Interactive wallet creation for people: the password is typed twice without
+/// echo, the mnemonic is shown once and three of its words are checked.
+async fn init(dir: &std::path::Path, network: Net, lightwalletd: Option<String>) -> anyhow::Result<()> {
+    if Wallet::exists(dir) {
+        anyhow::bail!("a wallet already exists in {}", dir.display());
+    }
+    println!("Creating a {network:?} wallet in {}", dir.display());
+    let password = loop {
+        let first = rpassword::prompt_password("Password (encrypts the seed, at least 12 characters): ")?;
+        if first.chars().count() < 12 {
+            println!("Too short.");
+            continue;
+        }
+        let second = rpassword::prompt_password("Repeat the password: ")?;
+        if first == second {
+            break first;
+        }
+        println!("The passwords differ.");
+    };
+    let (wallet, mnemonic) = Wallet::create(dir, network, lightwalletd, &password).await?;
+    let words: Vec<&str> = mnemonic.phrase().split_whitespace().collect();
+    println!();
+    println!("Write these 24 words down on paper. They are shown only once and restore the funds.");
+    println!("They do not restore approvals, contacts or history.");
+    println!();
+    for (i, word) in words.iter().enumerate() {
+        print!("{:>2}. {:<12}", i + 1, word);
+        if (i + 1) % 4 == 0 {
+            println!();
+        }
+    }
+    println!();
+    rpassword::prompt_password("Press Enter when they are written down (the screen will be cleared). ")?;
+    // Scroll the words out of view; works in every terminal.
+    print!("{}", "
+".repeat(80));
+    let seed = uuid::Uuid::new_v4().as_u128();
+    let mut checks: Vec<usize> = (0..words.len()).collect();
+    checks.sort_by_key(|&i| seed.rotate_left(i as u32 * 5) as u64 ^ i as u64);
+    for &i in checks.iter().take(3) {
+        loop {
+            let answer = rpassword::prompt_password(format!("Word number {}: ", i + 1))?;
+            if answer.trim().eq_ignore_ascii_case(words[i]) {
+                break;
+            }
+            println!("That is not it. Check your paper copy.");
+        }
+    }
+    println!("Wallet created, birthday height {}.", wallet.config().birthday);
+    println!("Next: `zaw daemon`, then open http://127.0.0.1:7341 and unlock with the password.");
+    Ok(())
+}
+
 fn network_of(dir: &std::path::Path) -> anyhow::Result<Net> {
     Ok(Wallet::open(dir)?.config().network)
 }
@@ -131,6 +189,7 @@ async fn real_main() -> anyhow::Result<()> {
     };
 
     match cli.command {
+        Command::Init { lightwalletd } => init(&dir, cli.network, lightwalletd).await,
         Command::Daemon {
             listen,
             public_host,

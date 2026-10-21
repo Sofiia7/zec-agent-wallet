@@ -33,24 +33,35 @@ cargo build --release --locked
 cargo test --locked
 ```
 
-## Try it on testnet
+## Try it
+
+The quickest way is the hosted testnet playground (link in the submission): two wallets run side by side, you press the buttons an agent would call and see the exact JSON the model receives. Approvals happen in the owner window.
+
+To run it yourself on testnet:
 
 ```
-# create a wallet (the password encrypts the seed)
-ZAW_PASSWORD=... zaw dev init
-zaw dev address            # get testnet coins (TAZ) from a faucet to this address
-
-# run the daemon, then open http://127.0.0.1:7341 and unlock with the password
-zaw daemon
+zaw init                   # choose a password, write down the 24 words
+zaw dev address            # a receive address; get test coins (TAZ) from a testnet faucet
+zaw daemon                 # then open http://127.0.0.1:7341 and unlock with the password
 ```
 
-Connect an MCP client, for example Claude Code:
+Connect an MCP client. Claude Code:
 
 ```
 claude mcp add zaw -- zaw mcp
 ```
 
-The MCP server reads its access token from the wallet folder; the daemon must be running.
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "zaw": { "command": "C:\\path\\to\\zaw.exe", "args": ["mcp"] }
+  }
+}
+```
+
+The MCP server reads its access token from the wallet folder; the daemon must be running. Wallet data lives in the OS data folder (`%APPDATA%\zaw\testnet` on Windows, `~/.local/share/zaw/testnet` on Linux); `--data-dir` overrides it.
 
 ## License
 
