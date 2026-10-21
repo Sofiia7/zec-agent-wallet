@@ -352,21 +352,21 @@ function renderSettings() {
 
 // ---- main ------------------------------------------------------------------
 
-async function refresh() {
+async function refresh(auto) {
   const [overview, bills, requests, contacts, events] = await Promise.all([
     api('GET', '/overview'), api('GET', '/bills'), api('GET', '/requests'), api('GET', '/contacts'), api('GET', '/events'),
   ]);
   cache = { overview, bills, requests, contacts, events };
-  render();
+  render(auto);
 }
 
-function render() {
+function render(auto) {
   renderHeader();
   const views = { overview: renderOverview, payments: renderPayments, approvals: renderApprovals, settings: renderSettings };
   const app = document.getElementById('app');
-  // Keep typed text: do not re-render while the owner is filling a form.
-  if (document.activeElement && app.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
-  app.replaceChildren(...[views[tab]()].flat());
+  // Keep typed text: background refreshes do not re-render while a form is being filled.
+  if (auto && document.activeElement && app.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+  app.replaceChildren(...[views[tab]()].flat(Infinity).filter(x => x !== null && x !== undefined && x !== false));
 }
 
 function start() {
@@ -380,7 +380,7 @@ function start() {
     };
   });
   refresh().catch(() => {});
-  if (!window.__poll) window.__poll = setInterval(() => { if (csrf) refresh().catch(() => {}); }, 10000);
+  if (!window.__poll) window.__poll = setInterval(() => { if (csrf) refresh(true).catch(() => {}); }, 10000);
 }
 
 (async () => {
