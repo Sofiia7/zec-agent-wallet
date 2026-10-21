@@ -9,7 +9,7 @@ A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded 
 - The owner approves a specific bill: recipient, amount, fee cap and deadline. The agent can pay that bill later, once, exactly as approved. Everything else waits for the owner.
 - The wallet never sends the model keys, addresses, transaction ids or text written by counterparties (memo, label, message). The model sees contact aliases, bill labels, amounts in ZEC with approximate USD, and statuses.
 - Retries, timeouts and crashes never turn into a second payment.
-- Orchard-only shielded payments in the first version.
+- Shielded payments in the Ironwood pool in the first version (Orchard has accepted only withdrawals since 28 July 2026).
 - A built-in light client: no Zcash node of your own is needed.
 
 ## What it does not promise

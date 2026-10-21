@@ -1,3 +1,141 @@
-fn main() {
-    println!("Hello, world!");
+mod wallet;
+
+use std::path::PathBuf;
+
+use anyhow::{Context, anyhow};
+use clap::{Parser, Subcommand};
+use zcash_protocol::value::Zatoshis;
+
+use wallet::{Net, Wallet};
+
+#[derive(Parser)]
+#[command(name = "zaw", version, about = "A shielded Zcash wallet for AI agents")]
+struct Cli {
+    /// Wallet data directory. Defaults to the OS data directory.
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
+
+    #[arg(long, global = true, value_enum, default_value_t = Net::Testnet)]
+    network: Net,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Low-level wallet commands for development and diagnostics.
+    #[command(subcommand)]
+    Dev(Dev),
+}
+
+#[derive(Subcommand)]
+enum Dev {
+    /// Create a new wallet. Reads the password from ZAW_PASSWORD.
+    Init {
+        #[arg(long)]
+        lightwalletd: Option<String>,
+        /// Print the mnemonic once (only for test wallets).
+        #[arg(long)]
+        show_mnemonic: bool,
+    },
+    /// Scan the chain up to the current tip.
+    Sync,
+    /// Print a fresh receive address (Orchard receiver only).
+    Address,
+    /// Print the balance in zatoshis.
+    Balance,
+    /// Pay an address. Reads the password from ZAW_PASSWORD.
+    Send {
+        address: String,
+        zatoshis: u64,
+    },
+    /// Show the status of a transaction.
+    Status { txid: String },
+}
+
+fn default_data_dir(network: Net) -> anyhow::Result<PathBuf> {
+    let base = dirs::data_dir().ok_or_else(|| anyhow!("no OS data directory"))?;
+    Ok(base.join("zaw").join(match network {
+        Net::Testnet => "testnet",
+        Net::Mainnet => "mainnet",
+    }))
+}
+
+fn password_from_env() -> anyhow::Result<String> {
+    std::env::var("ZAW_PASSWORD").context("set ZAW_PASSWORD")
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "warn".into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow!("installing the TLS crypto provider"))?;
+
+    let cli = Cli::parse();
+    let dir = match cli.data_dir {
+        Some(dir) => dir,
+        None => default_data_dir(cli.network)?,
+    };
+
+    match cli.command {
+        Command::Dev(dev) => run_dev(dev, &dir, cli.network).await,
+    }
+}
+
+async fn run_dev(dev: Dev, dir: &std::path::Path, network: Net) -> anyhow::Result<()> {
+    match dev {
+        Dev::Init {
+            lightwalletd,
+            show_mnemonic,
+        } => {
+            let password = password_from_env()?;
+            let (wallet, mnemonic) = Wallet::create(dir, network, lightwalletd, &password).await?;
+            println!(
+                "created {:?} wallet in {}, birthday {}",
+                wallet.config().network,
+                dir.display(),
+                wallet.config().birthday
+            );
+            if show_mnemonic {
+                println!("{}", mnemonic.phrase());
+            }
+        }
+        Dev::Sync => {
+            let status = Wallet::open(dir)?.sync().await?;
+            println!("synced: tip {}, scanned {}", status.chain_tip, status.fully_scanned);
+        }
+        Dev::Address => println!("{}", Wallet::open(dir)?.new_receive_address()?),
+        Dev::Balance => {
+            let balance = Wallet::open(dir)?.balance()?;
+            println!(
+                "spendable {} pending {} total {}",
+                balance.spendable, balance.pending, balance.total
+            );
+        }
+        Dev::Send { address, zatoshis } => {
+            let wallet = Wallet::open(dir)?;
+            let usk = wallet.unlock(&password_from_env()?)?;
+            wallet.sync().await?;
+            let amount = Zatoshis::from_u64(zatoshis).map_err(|_| anyhow!("invalid amount"))?;
+            let txid = wallet.build_payment(&usk, &address, amount, None)?;
+            println!("built {txid}");
+            wallet.broadcast(txid).await?;
+            println!("broadcast {txid}");
+        }
+        Dev::Status { txid } => {
+            let wallet = Wallet::open(dir)?;
+            wallet.sync().await?;
+            println!("{:?}", wallet.tx_status(wallet::parse_txid(&txid)?)?);
+        }
+    }
+    Ok(())
 }
