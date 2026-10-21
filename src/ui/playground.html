@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zec Agent Wallet playground</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Zec Agent Wallet playground <span class="badge">TESTNET</span></div>
+</header>
+<main>
+  <div class="notice">
+    <p><strong>Real shielded transactions on Zcash testnet, with test coins.</strong> No language model runs here: you press the buttons an agent would call, and you see the exact JSON the model would receive. Two wallets run side by side: a <em>designer</em> who bills, and a <em>customer</em> whose agent pays.</p>
+    <p>Try this: 1) the designer's agent issues a bill; 2) the customer's agent tries to pay it and is refused; 3) open the owner window, approve the bill with the password from the submission; 4) the agent pays it, and paying again returns the same payment; 5) the designer's agent checks its bill. Then send the forged bill and see what the model gets.</p>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h3>Designer's agent</h3>
+      <p class="muted">Issues a 0.001 TAZ bill to the customer through <code>request_payment</code>. The payment link goes to the customer's wallet, not to the model.</p>
+      <div class="row">
+        <button id="issue" class="primary">Issue a bill</button>
+        <button id="check">check_request</button>
+      </div>
+      <label>What the designer's model receives</label>
+      <pre id="designer-out">-</pre>
+    </section>
+
+    <section class="card">
+      <h3>Attacker</h3>
+      <p class="muted">Sends the customer a forged bill: ten times the amount, an unknown address and a prompt injection in the memo.</p>
+      <button id="forge" class="danger">Send a forged bill</button>
+      <pre id="attacker-out">-</pre>
+    </section>
+
+    <section class="card">
+      <h3>Customer's owner</h3>
+      <p class="muted">Approvals happen only here, behind the wallet password. The owner sees the sender's text and the address; the model never does.</p>
+      <p><a href="/" target="_blank" rel="noopener">Open the owner window</a></p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h3>Customer's agent: what the model receives</h3>
+    <div class="row">
+      <button data-tool="wallet_status">wallet_status</button>
+      <button data-tool="list_bills">list_bills</button>
+      <select id="bill"><option value="">pick a bill</option></select>
+      <button data-tool="request_approval" data-needs="bill">request_approval</button>
+      <button data-tool="pay_bill" data-needs="bill" class="primary">pay_bill</button>
+      <button data-tool="get_payment" data-needs="op">get_payment</button>
+      <button data-tool="list_activity">list_activity</button>
+    </div>
+    <label id="agent-call">-</label>
+    <pre id="agent-out">-</pre>
+  </section>
+</main>
+<script src="/playground.js"></script>
+</body>
+</html>

@@ -40,6 +40,12 @@ enum Command {
         /// Unlock at start with the password in ZAW_PASSWORD (test wallets only).
         #[arg(long)]
         unlock_from_env: bool,
+        /// Serve the public testnet playground, with a second daemon as the designer.
+        #[arg(long)]
+        playground_peer_url: Option<String>,
+        /// Data directory of the peer daemon, to read its agent token.
+        #[arg(long)]
+        playground_peer_dir: Option<PathBuf>,
     },
     /// MCP server over stdio for an AI client. Holds no keys; talks to the daemon.
     Mcp {
@@ -84,6 +90,10 @@ fn default_data_dir(network: Net) -> anyhow::Result<PathBuf> {
     }))
 }
 
+fn network_of(dir: &std::path::Path) -> anyhow::Result<Net> {
+    Ok(Wallet::open(dir)?.config().network)
+}
+
 fn password_from_env() -> anyhow::Result<String> {
     std::env::var("ZAW_PASSWORD").context("set ZAW_PASSWORD")
 }
@@ -125,7 +135,22 @@ async fn real_main() -> anyhow::Result<()> {
             listen,
             public_host,
             unlock_from_env,
+            playground_peer_url,
+            playground_peer_dir,
         } => {
+            let playground = match (playground_peer_url, playground_peer_dir) {
+                (Some(peer_url), Some(peer_dir)) => {
+                    if network_of(&dir)? != Net::Testnet {
+                        anyhow::bail!("the playground runs on testnet only");
+                    }
+                    Some(daemon::playground::Config {
+                        peer_url,
+                        peer_token: daemon::agent_token(&peer_dir)?,
+                    })
+                }
+                (None, None) => None,
+                _ => anyhow::bail!("--playground-peer-url and --playground-peer-dir go together"),
+            };
             let unlock_password = if unlock_from_env {
                 Some(password_from_env()?)
             } else {
@@ -137,6 +162,7 @@ async fn real_main() -> anyhow::Result<()> {
                     listen,
                     public_host,
                     unlock_password,
+                    playground,
                 },
             )
             .await

@@ -20,6 +20,8 @@ use tokio::sync::Notify;
 use zcash_protocol::memo::MemoBytes;
 use zcash_protocol::value::Zatoshis;
 
+pub mod playground;
+
 use crate::dto::{self, NextAction};
 use crate::invoice::{self, format_zec, parse_zec};
 use crate::policy::{self, Reason, Snapshot};
@@ -61,12 +63,16 @@ pub struct Daemon {
     notify: Notify,
     last_sync: Mutex<Option<SyncStatus>>,
     allowed_hosts: Vec<String>,
+    /// Set when served over HTTPS behind a reverse proxy.
+    secure_cookies: bool,
+    playground: Option<playground::Playground>,
 }
 
 pub struct Options {
     pub listen: String,
     pub public_host: Option<String>,
     pub unlock_password: Option<String>,
+    pub playground: Option<playground::Config>,
 }
 
 fn random_token() -> String {
@@ -122,6 +128,8 @@ pub async fn run(dir: &Path, opts: Options) -> anyhow::Result<()> {
         notify: Notify::new(),
         last_sync: Mutex::new(None),
         allowed_hosts,
+        secure_cookies: opts.public_host.is_some(),
+        playground: opts.playground.map(playground::Playground::new).transpose()?,
     });
 
     daemon.recover()?;
@@ -976,6 +984,7 @@ fn router(daemon: Shared) -> Router {
         .route("/app.css", get(ui_css))
         .nest("/api/agent", agent)
         .nest("/api/owner", owner)
+        .merge(playground::routes())
         .layer(middleware::from_fn_with_state(daemon.clone(), check_host))
         .with_state(daemon)
 }
@@ -1271,8 +1280,9 @@ async fn owner_login(State(d): State<Shared>, Json(body): Json<Password>) -> Res
         );
     }
     let _ = d.store.log("owner_login", None, None);
+    let secure = if d.secure_cookies { "; Secure" } else { "" };
     let cookie = format!(
-        "zaw_session={id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECS}"
+        "zaw_session={id}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_TTL_SECS}{secure}"
     );
     (
         [(header::SET_COOKIE, cookie)],

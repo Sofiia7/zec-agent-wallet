@@ -12,6 +12,7 @@ age = "0.12"
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
+base64 = "0.22"
 bip0039 = { version = "0.14", features = ["std"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }

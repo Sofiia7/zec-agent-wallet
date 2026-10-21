@@ -96,3 +96,6 @@ th { color: var(--muted); font-weight: 500; }
 @media (prefers-reduced-motion: no-preference) { button { transition: background .12s; } }
 .login { max-width: 420px; margin: 40px auto; }
 .grow { flex: 1; }
+a { color: var(--accent); }
+.row select { width: auto; flex: 1; min-width: 200px; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }

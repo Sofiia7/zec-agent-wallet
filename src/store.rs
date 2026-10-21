@@ -527,15 +527,6 @@ impl Store {
             .optional()?)
     }
 
-    pub fn approvals(&self) -> anyhow::Result<Vec<Approval>> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {APPROVAL_COLS} FROM approvals ORDER BY created_at DESC"
-        ))?;
-        let rows = stmt.query_map([], approval_from_row)?;
-        Ok(rows.collect::<Result<_, _>>()?)
-    }
-
     pub fn set_approval_status(&self, id: &str, status: &str) -> anyhow::Result<()> {
         self.conn()?.execute(
             "UPDATE approvals SET status = ?2 WHERE id = ?1",
@@ -669,6 +660,7 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    #[cfg(test)]
     pub fn operations(&self) -> anyhow::Result<Vec<Operation>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
