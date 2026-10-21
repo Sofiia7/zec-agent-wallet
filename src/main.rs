@@ -1,3 +1,7 @@
+mod dto;
+mod invoice;
+mod policy;
+mod store;
 mod wallet;
 
 use std::path::PathBuf;
@@ -66,8 +70,20 @@ fn password_from_env() -> anyhow::Result<String> {
     std::env::var("ZAW_PASSWORD").context("set ZAW_PASSWORD")
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Proof construction recurses deeply; the 1 MiB default main-thread stack on
+/// Windows overflows in debug builds. All work runs on runtime threads with this
+/// stack size instead.
+const THREAD_STACK_SIZE: usize = 64 * 1024 * 1024;
+
+fn main() -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(THREAD_STACK_SIZE)
+        .build()?;
+    runtime.block_on(async { tokio::spawn(real_main()).await? })
+}
+
+async fn real_main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -123,10 +139,13 @@ async fn run_dev(dev: Dev, dir: &std::path::Path, network: Net) -> anyhow::Resul
         }
         Dev::Send { address, zatoshis } => {
             let wallet = Wallet::open(dir)?;
-            let usk = wallet.unlock(&password_from_env()?)?;
+            let keys = wallet.unlock(&password_from_env()?)?;
             wallet.sync().await?;
             let amount = Zatoshis::from_u64(zatoshis).map_err(|_| anyhow!("invalid amount"))?;
-            let txid = wallet.build_payment(&usk, &address, amount, None)?;
+            let (txid, fee) = wallet
+                .build_payment(&keys.usk, &address, amount, None, 1_000_000)?
+                .map_err(|refusal| anyhow!("refused: {refusal:?}"))?;
+            println!("fee {fee}");
             println!("built {txid}");
             wallet.broadcast(txid).await?;
             println!("broadcast {txid}");

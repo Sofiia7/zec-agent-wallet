@@ -32,6 +32,8 @@ use zcash_client_backend::wallet::OvkPolicy;
 use zcash_client_sqlite::util::SystemClock;
 use zcash_client_sqlite::wallet::{commitment_tree, init::init_wallet_db};
 use zcash_client_sqlite::{AccountUuid, WalletDb};
+use sha2::{Digest, Sha256};
+use zcash_keys::address::Address;
 use zcash_keys::keys::{UnifiedAddressRequest, UnifiedSpendingKey};
 use zcash_primitives::transaction::TxId;
 use zcash_primitives::transaction::fees::zip317;
@@ -111,6 +113,26 @@ pub enum TxStatus {
 pub struct Wallet {
     dir: PathBuf,
     config: Config,
+}
+
+/// Secrets held in daemon memory while the wallet is unlocked.
+pub struct UnlockedKeys {
+    pub usk: UnifiedSpendingKey,
+    pub approval_key: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecipientError {
+    /// Transparent, TEX, Sapling-only or a unified address without an Orchard receiver.
+    Unsupported,
+    WrongNetwork,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuildRefusal {
+    FeeTooHigh(u64),
+    InsufficientFunds,
 }
 
 fn confirmations_policy() -> ConfirmationsPolicy {
@@ -227,14 +249,73 @@ impl Wallet {
             .ok_or_else(|| anyhow!("wallet has no account"))
     }
 
-    /// Checks the password by decrypting the seed. Returns the spending key.
-    pub fn unlock(&self, password: &str) -> anyhow::Result<UnifiedSpendingKey> {
+    /// Checks the password by decrypting the seed. Returns the spending key and the
+    /// key that authenticates owner approvals; both exist only in memory.
+    pub fn unlock(&self, password: &str) -> anyhow::Result<UnlockedKeys> {
         let phrase = decrypt_seed(&fs::read(Self::seed_path(&self.dir))?, password)?;
         let mnemonic = <Mnemonic<English>>::from_phrase(phrase.expose_secret().as_str())
             .map_err(|e| anyhow!("stored mnemonic is invalid: {e:?}"))?;
         let seed = SecretVec::new(mnemonic.to_seed("").to_vec());
-        UnifiedSpendingKey::from_seed(&self.params(), seed.expose_secret(), zip32::AccountId::ZERO)
-            .map_err(|e| anyhow!("deriving spending key: {e:?}"))
+        let usk = UnifiedSpendingKey::from_seed(
+            &self.params(),
+            seed.expose_secret(),
+            zip32::AccountId::ZERO,
+        )
+        .map_err(|e| anyhow!("deriving spending key: {e:?}"))?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"zaw/approval-mac/v1");
+        hasher.update(seed.expose_secret());
+        Ok(UnlockedKeys {
+            usk,
+            approval_key: hasher.finalize().into(),
+        })
+    }
+
+    /// Checks that `address` can receive a payment from this wallet: a unified address
+    /// on the same network with an Orchard receiver.
+    pub fn check_recipient(&self, address: &str) -> Result<(), RecipientError> {
+        let params = self.params();
+        match Address::decode(&params, address) {
+            Some(Address::Unified(ua)) if ua.has_orchard() => Ok(()),
+            Some(_) => Err(RecipientError::Unsupported),
+            None => {
+                let other = match self.config.network {
+                    Net::Testnet => Network::MainNetwork,
+                    Net::Mainnet => Network::TestNetwork,
+                };
+                if Address::decode(&other, address).is_some() {
+                    Err(RecipientError::WrongNetwork)
+                } else {
+                    Err(RecipientError::Invalid)
+                }
+            }
+        }
+    }
+
+    /// Non-change outputs received at one of our addresses, with the height they were
+    /// mined at. Reads the librustzcash schema directly: there is no per-address query
+    /// in the wallet API.
+    pub fn received_at(&self, address: &str) -> anyhow::Result<Vec<(u64, Option<u32>)>> {
+        let conn = rusqlite::Connection::open(Self::db_path(&self.dir))?;
+        let mut stmt = conn.prepare(
+            "SELECT ro.value, t.mined_height
+             FROM v_received_outputs ro
+             JOIN addresses a ON a.id = ro.address_id
+             JOIN transactions t ON t.id_tx = ro.transaction_id
+             WHERE a.address = ?1 AND ro.is_change = 0",
+        )?;
+        let rows = stmt.query_map([address], |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Option<u32>>(1)?))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn tx_expiry(&self, txid: TxId) -> anyhow::Result<Option<u32>> {
+        Ok(self
+            .db()?
+            .get_transaction(txid)
+            .map_err(|e| anyhow!("reading transaction: {e}"))?
+            .map(|tx| u32::from(tx.expiry_height())))
     }
 
     pub async fn sync(&self) -> anyhow::Result<SyncStatus> {
@@ -291,15 +372,17 @@ impl Wallet {
         Ok(ua.encode(&self.params()))
     }
 
-    /// Builds, signs and stores a transaction paying `amount` to `address`.
-    /// Does not broadcast: callers persist the txid first, then call [`Self::broadcast`].
+    /// Builds, signs and stores a transaction paying `amount` to `address`, unless the
+    /// fee would exceed `max_fee`. Does not broadcast: callers persist the txid first,
+    /// then call [`Self::broadcast`].
     pub fn build_payment(
         &self,
         usk: &UnifiedSpendingKey,
         address: &str,
         amount: Zatoshis,
         memo: Option<MemoBytes>,
-    ) -> anyhow::Result<TxId> {
+        max_fee: u64,
+    ) -> anyhow::Result<Result<(TxId, u64), BuildRefusal>> {
         let params = self.params();
         let recipient =
             ZcashAddress::from_str(address).map_err(|e| anyhow!("invalid address: {e}"))?;
@@ -316,7 +399,7 @@ impl Wallet {
             ShieldedPool::Ironwood,
             DustOutputPolicy::default(),
         );
-        let proposal = propose_transfer::<_, _, _, _, commitment_tree::Error>(
+        let proposal = match propose_transfer::<_, _, _, _, commitment_tree::Error>(
             &mut db,
             &params,
             account,
@@ -328,7 +411,24 @@ impl Wallet {
             None,
             None,
         )
-        .map_err(|e| anyhow!("proposing transfer: {e}"))?;
+        {
+            Ok(proposal) => proposal,
+            Err(e) => {
+                let text = e.to_string();
+                if text.to_lowercase().contains("insufficient") {
+                    return Ok(Err(BuildRefusal::InsufficientFunds));
+                }
+                bail!("proposing transfer: {text}");
+            }
+        };
+        let fee: u64 = proposal
+            .steps()
+            .iter()
+            .map(|step| step.balance().fee_required().into_u64())
+            .sum();
+        if fee > max_fee {
+            return Ok(Err(BuildRefusal::FeeTooHigh(fee)));
+        }
 
         let prover = LocalTxProver::bundled();
         let txids = create_proposed_transactions::<_, _, GreedyInputSelectorError, _, zip317::FeeError, _>(
@@ -347,7 +447,7 @@ impl Wallet {
         if txids.len() > 1 {
             bail!("multi-transaction proposals are not supported");
         }
-        Ok(*txids.first())
+        Ok(Ok((*txids.first(), fee)))
     }
 
     /// Sends a stored transaction to lightwalletd. Safe to repeat: the same bytes are
