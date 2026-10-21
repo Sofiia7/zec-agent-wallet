@@ -434,6 +434,10 @@ impl Daemon {
                 continue;
             }
             let name = entry.file_name();
+            // Senders write `.name.tmp` first and rename it when complete.
+            if name.to_string_lossy().starts_with('.') {
+                continue;
+            }
             let is_txt = path.extension().and_then(|e| e.to_str()) == Some("txt");
             let accepted = is_txt
                 && meta.file_type().is_file()
