@@ -754,3 +754,124 @@ impl Store {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store() -> (Store, std::path::PathBuf) {
+        let path = std::env::temp_dir().join(format!("zaw-test-{}.sqlite", uuid::Uuid::new_v4().simple()));
+        (Store::open(&path).unwrap(), path)
+    }
+
+    fn bill_with_approval(store: &Store, amount: u64) -> (String, String) {
+        let (bill, _) = store
+            .insert_bill(
+                &format!("zcash:x?amount={amount}"),
+                &new_id("h"),
+                "utest1recipient",
+                amount,
+                None,
+                None,
+                None,
+                None,
+                "owner",
+            )
+            .unwrap();
+        let approval = new_id("ap");
+        store
+            .insert_approval(&approval, &bill, b"{}", b"mac", 10_000, now() + 3600, None, "Logo")
+            .unwrap();
+        (bill, approval)
+    }
+
+    #[test]
+    fn second_reservation_returns_the_same_operation() {
+        let (store, _path) = temp_store();
+        let (bill, approval) = bill_with_approval(&store, 500_000);
+        let first = match store.reserve_payment(&bill, &approval, 500_000, 10_000, 10_000_000).unwrap() {
+            Ok(Reservation::New(op)) => op,
+            _ => panic!("expected a new operation"),
+        };
+        match store.reserve_payment(&bill, &approval, 500_000, 10_000, 10_000_000).unwrap() {
+            Ok(Reservation::Existing(op)) => assert_eq!(op.id, first.id),
+            _ => panic!("expected the existing operation"),
+        }
+        assert_eq!(store.approval(&approval).unwrap().unwrap().status, "in_use");
+    }
+
+    #[test]
+    fn concurrent_reservations_create_one_operation() {
+        let (store, _path) = temp_store();
+        let (bill, approval) = bill_with_approval(&store, 500_000);
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let (bill, approval) = (bill.clone(), approval.clone());
+                std::thread::spawn(move || {
+                    matches!(
+                        store.reserve_payment(&bill, &approval, 500_000, 10_000, 10_000_000).unwrap(),
+                        Ok(Reservation::New(_))
+                    )
+                })
+            })
+            .collect();
+        let new_ops = handles.into_iter().filter(|_| true).map(|h| h.join().unwrap()).filter(|n| *n).count();
+        assert_eq!(new_ops, 1);
+        assert_eq!(store.operations().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn daily_limit_counts_reservations_and_fees() {
+        let (store, _path) = temp_store();
+        let (a, ap_a) = bill_with_approval(&store, 600_000);
+        let (b, ap_b) = bill_with_approval(&store, 600_000);
+        assert!(matches!(
+            store.reserve_payment(&a, &ap_a, 600_000, 10_000, 1_000_000).unwrap(),
+            Ok(Reservation::New(_))
+        ));
+        assert!(matches!(
+            store.reserve_payment(&b, &ap_b, 600_000, 10_000, 1_000_000).unwrap(),
+            Err("over_daily_limit")
+        ));
+        assert_eq!(store.approval(&ap_b).unwrap().unwrap().status, "active");
+    }
+
+    #[test]
+    fn zero_limit_pays_nothing() {
+        let (store, _path) = temp_store();
+        let (a, ap_a) = bill_with_approval(&store, 1);
+        assert!(matches!(
+            store.reserve_payment(&a, &ap_a, 1, 0, 0).unwrap(),
+            Err("over_daily_limit")
+        ));
+    }
+
+    #[test]
+    fn revoke_only_before_payment_starts() {
+        let (store, _path) = temp_store();
+        let (a, ap_a) = bill_with_approval(&store, 1_000);
+        let (b, ap_b) = bill_with_approval(&store, 1_000);
+        assert!(store.revoke_approval(&ap_a).unwrap());
+        assert!(matches!(
+            store.reserve_payment(&a, &ap_a, 1_000, 10, 1_000_000).unwrap(),
+            Err("not_approved")
+        ));
+        store.reserve_payment(&b, &ap_b, 1_000, 10, 1_000_000).unwrap().ok();
+        assert!(!store.revoke_approval(&ap_b).unwrap());
+    }
+
+    #[test]
+    fn same_link_imports_once() {
+        let (store, _path) = temp_store();
+        let first = store
+            .insert_bill("zcash:x", "hash-1", "utest1r", 5, None, None, None, None, "inbox")
+            .unwrap();
+        let second = store
+            .insert_bill("zcash:x", "hash-1", "utest1r", 5, None, None, None, None, "inbox")
+            .unwrap();
+        assert!(first.1);
+        assert!(!second.1);
+        assert_eq!(first.0, second.0);
+    }
+}

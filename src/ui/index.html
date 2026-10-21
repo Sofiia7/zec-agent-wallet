@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zec Agent Wallet</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Zec Agent Wallet <span id="net" class="badge"></span></div>
+  <div id="chips" class="chips"></div>
+  <button id="pause" class="danger" hidden>Stop agent payments</button>
+</header>
+<nav id="tabs" class="tabs" hidden>
+  <button data-tab="overview" class="active">Overview</button>
+  <button data-tab="payments">Payments</button>
+  <button data-tab="approvals">Approvals</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+<main id="app"><p class="muted">Loading</p></main>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,7 @@
+mod daemon;
 mod dto;
 mod invoice;
+mod mcp;
 mod policy;
 mod store;
 mod wallet;
@@ -28,6 +30,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run the wallet daemon: sync, payments, the owner window and the agent API.
+    Daemon {
+        #[arg(long, default_value = "127.0.0.1:7341")]
+        listen: String,
+        /// Extra Host header to accept, for a daemon behind a reverse proxy.
+        #[arg(long)]
+        public_host: Option<String>,
+        /// Unlock at start with the password in ZAW_PASSWORD (test wallets only).
+        #[arg(long)]
+        unlock_from_env: bool,
+    },
+    /// MCP server over stdio for an AI client. Holds no keys; talks to the daemon.
+    Mcp {
+        #[arg(long, default_value = "http://127.0.0.1:7341")]
+        daemon_url: String,
+    },
     /// Low-level wallet commands for development and diagnostics.
     #[command(subcommand)]
     Dev(Dev),
@@ -103,6 +121,33 @@ async fn real_main() -> anyhow::Result<()> {
     };
 
     match cli.command {
+        Command::Daemon {
+            listen,
+            public_host,
+            unlock_from_env,
+        } => {
+            let unlock_password = if unlock_from_env {
+                Some(password_from_env()?)
+            } else {
+                None
+            };
+            daemon::run(
+                &dir,
+                daemon::Options {
+                    listen,
+                    public_host,
+                    unlock_password,
+                },
+            )
+            .await
+        }
+        Command::Mcp { daemon_url } => {
+            let token = std::fs::read_to_string(dir.join("agent-token"))
+                .context("no agent token: start the daemon once first")?
+                .trim()
+                .to_string();
+            mcp::run(mcp::Options { daemon_url, token }).await
+        }
         Command::Dev(dev) => run_dev(dev, &dir, cli.network).await,
     }
 }
