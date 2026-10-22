@@ -65,7 +65,7 @@ Protection: password login (the password decrypts the seed) with a growing delay
 
 ## Network
 
-Since NU6.3 (28 July 2026) no new value may enter the Orchard pool (ZIP 258); payments to an Orchard receiver land in the Ironwood pool. The wallet uses Orchard-only unified addresses and spends from Ironwood, so it never moves value between pools (pool crossings reveal amounts, ZIP 315). NU7 is active on testnet since 4 October 2026, so the wallet builds on librustzcash pre-releases pinned exactly (`zcash_client_backend` 0.25.0-pre.2, `zcash_client_sqlite` 0.23.0-pre.2). Confirmation thresholds are fixed in the code, not taken from library defaults.
+Since NU6.3 (28 July 2026) no new value may enter the Orchard pool (ZIP 258); payments to an Orchard receiver land in the Ironwood pool. The wallet uses Orchard-only unified addresses and spends from Ironwood, so it never moves value between pools (pool crossings reveal amounts, ZIP 315). The wallet pins librustzcash releases that know the NU7 activation heights (`zcash_client_backend` 0.25.0, `zcash_client_sqlite` 0.23.0, `zcash_protocol` 0.11.0): NU7 is active on testnet since 4 October 2026 and activates on mainnet at height 3,543,405. Confirmation thresholds are fixed in the code, not taken from library defaults.
 
 Incoming payments for a request are matched by the request's own address, not by memo. "Paid" means enough value arrived at that address with enough confirmations; it does not prove who sent it.
 
