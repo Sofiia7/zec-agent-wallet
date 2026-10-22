@@ -29,7 +29,7 @@ The full threat model, including what is out of scope (an agent with shell acces
 | SQL injection | Code review | All queries use bound parameters; the only formatted lists are compile-time constants |
 | Untrusted input | Code review | Payment links: single recipient, strict ZIP 321 parsing, 2 KB limit. Inbox files: regular `.txt` only, no symlinks, 4 KB limit, partially written files skipped |
 | Error detail | Code review | The model gets fixed reason codes only; library errors are logged locally, never returned to the agent |
-| Dependencies | cargo-audit | See the latest CI run and the release notes |
+| Dependencies | cargo-audit in CI over 482 crates (22 Oct 2026) | No known vulnerabilities. One unmaintained-crate warning: `basic-toml` (RUSTSEC-2026-0374), used only at build time by the localisation macros of `age`; no untrusted TOML is parsed at run time |
 
 ## Known limits
 
