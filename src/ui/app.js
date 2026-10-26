@@ -187,6 +187,10 @@ function approveForm(b) {
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
     withError(err, async () => {
+      if (!label.value.trim()) {
+        label.focus();
+        throw new Error('Type a short label the model will see, for example "Logo #17". The agent finds the bill by it.');
+      }
       await api('POST', `/bills/${b.bill.id}/approve`, {
         password: pw.value, label: label.value, contact_id: contact.value || null,
         fee_limit_zec: fee.value, expires_hours: Number(hours.value) || 168,

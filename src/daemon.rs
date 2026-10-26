@@ -1403,7 +1403,13 @@ async fn owner_approve(
         return owner_error(StatusCode::CONFLICT, "this bill is not waiting for approval");
     }
     let label = body.label.trim().to_string();
-    if label.is_empty() || label.chars().count() > MAX_LABEL_LEN || dto::leaks(&json!(label)) {
+    if label.is_empty() {
+        return owner_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "type a short label the model will see, for example Logo #17; the agent finds the bill by it",
+        );
+    }
+    if label.chars().count() > MAX_LABEL_LEN || dto::leaks(&json!(label)) {
         return owner_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "the label must be short text without addresses; the model will see it",
