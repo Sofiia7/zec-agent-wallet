@@ -29,7 +29,7 @@ The full threat model, including what is out of scope (an agent with shell acces
 | SQL injection | Code review | All queries use bound parameters; the only formatted lists are compile-time constants |
 | Untrusted input | Code review | Payment links: single recipient, strict ZIP 321 parsing, 2 KB limit. Inbox files: regular `.txt` only, no symlinks, 4 KB limit, partially written files skipped |
 | Error detail | Code review | The model gets fixed reason codes only; library errors are logged locally, never returned to the agent |
-| Dependencies | cargo-audit in CI over 482 crates (22 Oct 2026) | No known vulnerabilities. One unmaintained-crate warning: `basic-toml` (RUSTSEC-2026-0374), used only at build time by the localisation macros of `age`; no untrusted TOML is parsed at run time |
+| Dependencies | cargo-audit in CI over 482 crates (26 Oct 2026) | `ctutils` (RUSTSEC-2026-0385) updated to 0.4.6. One advisory ignored in `.cargo/audit.toml`: `crypto-bigint` 0.5.5 (RUSTSEC-2026-0387, timing variability) comes only through `age` -> `p256`, which `age` uses for p256tag recipients; the wallet encrypts the seed with the scrypt passphrase recipient only, so that code never runs. No `age` release with `crypto-bigint` 0.7 exists yet. One unmaintained-crate warning: `basic-toml` (RUSTSEC-2026-0374), used only at build time by the localisation macros of `age`; no untrusted TOML is parsed at run time |
 
 ## Known limits
 

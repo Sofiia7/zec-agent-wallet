@@ -1,0 +1,9 @@
+# cargo-audit configuration. Every ignored advisory is explained in SECURITY.md.
+[advisories]
+ignore = [
+    # crypto-bigint 0.5.5: timing variability. Reached only through age -> p256,
+    # which age uses for p256tag recipients. zaw encrypts the seed with the scrypt
+    # passphrase recipient only, so the affected arithmetic never runs. Remove
+    # when age moves to elliptic-curve 0.14 / crypto-bigint 0.7.
+    "RUSTSEC-2026-0387",
+]
