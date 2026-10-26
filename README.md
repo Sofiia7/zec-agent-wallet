@@ -2,7 +2,7 @@
 
 A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded ZEC over the Model Context Protocol (MCP), without handing the model your keys, addresses or the messages your counterparties write. Working name.
 
-**Status:** early development for ZECATHON (October 2026), tested on testnet only. Not ready for real funds.
+**Status:** early development for ZECATHON (October 2026), tested on testnet and with one small mainnet payment. Not ready for real funds.
 
 ## What works today (testnet)
 
@@ -15,6 +15,8 @@ A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded 
 - `scripts/leak_check.py`: feeds canary strings and an address through a bill's memo, label and message and checks every agent API and MCP output, including stderr.
 
 End to end on testnet: one agent issued a bill, the other side's owner approved it, its agent paid it, and the first agent saw it paid after 3 confirmations.
+
+Once on mainnet (26 Oct 2026): the same flow between two wallets, with the payer's agent running on the Claude API ([examples/claude_agent.py](examples/claude_agent.py)). The 0.001 ZEC bill was paid with a 0.0001 ZEC fee and seen as paid about 3 minutes after `pay_bill`. Claude's desktop app declines to move real funds on its own rules, so on mainnet use an agent you run on the API.
 
 ## What it does not promise
 
