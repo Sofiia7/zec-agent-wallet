@@ -165,7 +165,8 @@ function senderText(b) {
 function approveForm(b) {
   const c = coin();
   const contacts = cache.contacts || [];
-  const label = h('input', { value: b.bill.label || '', maxlength: 80, placeholder: 'e.g. Logo #17' });
+  // Prefilled with neutral text, never with the sender's label: that text must not reach the model.
+  const label = h('input', { value: b.bill.label || `Bill for ${zec(b.bill.amount)} ${c}`, maxlength: 80, placeholder: 'e.g. Logo #17' });
   const contact = h('select', {},
     h('option', { value: '' }, '- no contact -'),
     ...contacts.map(ct => h('option', { value: ct.id, selected: b.bill.contact_id === ct.id }, `${ct.local_name} (model sees "${ct.alias}")`)));
