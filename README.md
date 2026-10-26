@@ -61,6 +61,13 @@ Claude Desktop (`claude_desktop_config.json`):
 }
 ```
 
+Your own agent on the Claude API: [examples/claude_agent.py](examples/claude_agent.py) starts `zaw mcp`, gives Claude its tools and pays the bills the owner approved.
+
+```
+pip install "anthropic[mcp]"
+python examples/claude_agent.py --zaw path/to/zaw "Pay the approved bill Logo #17"
+```
+
 The MCP server reads its access token from the wallet folder; the daemon must be running. Wallet data lives in the OS data folder (`%APPDATA%\zaw\testnet` on Windows, `~/.local/share/zaw/testnet` on Linux); `--data-dir` overrides it.
 
 ## License
