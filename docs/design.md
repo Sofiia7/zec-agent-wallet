@@ -59,7 +59,7 @@ The MCP server is a small hand-written JSON-RPC layer (`src/mcp.rs`) so that eve
 
 ## Owner window
 
-A local web page served by the daemon on 127.0.0.1: overview, payments (bills to pay, own payment requests, history), approvals and settings. It shows, next to each bill, the exact response the model gets. Text from counterparties is shown separately, as plain text, marked as sender text.
+A local web page served by the daemon on 127.0.0.1: overview (balance, daily limit, bills waiting for a decision), bills (approval is a state of the bill: needs you, approved, paid; own payment requests below), activity in plain sentences, and settings (contacts, lock, how to connect an agent). Each bill expands to show what only the owner sees (recipient check, address, sender text) next to the exact response the model gets. Text from counterparties is shown as plain text, marked as sender text.
 
 Protection: password login (the password decrypts the seed) with a growing delay after failures that survives restarts, an HttpOnly SameSite=Strict session cookie, a CSRF token on every change, Host and Origin checks, a strict Content Security Policy with no external resources, no framing.
 
