@@ -4,14 +4,14 @@ A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded 
 
 **Status:** early development for ZECATHON (October 2026), tested on testnet and with one small mainnet payment. Not ready for real funds.
 
-## What works today (testnet)
+## What works today
 
-- `zaw daemon`: light-client wallet (no node needed) that syncs through lightwalletd, receives on Orchard-only unified addresses (funds land in the Ironwood pool) and sends shielded payments.
+- `zaw daemon`: light-client wallet for testnet and mainnet (no node needed) that syncs through lightwalletd, receives on Orchard-only unified addresses (funds land in the Ironwood pool) and sends shielded payments.
 - Owner approval of a specific bill: recipient, amount, memo, fee limit and expiry, confirmed with the wallet password. The agent can then pay that bill once, exactly as approved. Unapproved, changed or expired bills are refused with a fixed reason code.
 - One payment per bill: repeated or concurrent `pay_bill` calls return the same operation. States are stored before each step; an interrupted build is never retried automatically.
 - Payment requests (`request_payment`) on a fresh address per request, delivered to a folder or handed to the owner, and `check_request` that matches incoming funds by address and confirmations.
 - `zaw mcp`: an MCP server over stdio with 9 tools. It holds no keys and returns only aliases, owner-set labels, amounts and statuses. Every response is checked for anything that looks like an address, key or transaction id before it leaves the process.
-- A local owner window: approvals, bills with the sender's text shown separately, payment requests, a daily limit, a stop button for agent payments, and next to each item the exact response the model receives.
+- A local owner window: bills with their approval state (needs you, approved, paid), the sender's text and the address shown only to the owner, payment requests, a daily limit, a stop button for agent payments, a plain-language activity log, and for each bill the exact response the model receives.
 - `scripts/leak_check.py`: feeds canary strings and an address through a bill's memo, label and message and checks every agent API and MCP output, including stderr.
 
 End to end on testnet: one agent issued a bill, the other side's owner approved it, its agent paid it, and the first agent saw it paid after 3 confirmations.
@@ -37,7 +37,7 @@ cargo test --locked
 
 ## Try it
 
-The quickest way is the hosted testnet playground (link in the submission): two wallets run side by side, you press the buttons an agent would call and see the exact JSON the model receives. Approvals happen in the owner window.
+The quickest way is the hosted testnet playground, https://zaw.89-124-77-59.sslip.io/playground (the owner password is in the submission): two wallets run side by side, you press the buttons an agent would call and see the exact JSON the model receives. Approvals happen in the owner window.
 
 To run it yourself on testnet:
 
@@ -46,6 +46,8 @@ zaw init                   # choose a password, write down the 24 words
 zaw dev address            # a receive address; get test coins (TAZ) from a testnet faucet
 zaw daemon                 # then open http://127.0.0.1:7341 and unlock with the password
 ```
+
+On mainnet, add `--network mainnet` to each command (wallet data then lives in a separate `mainnet` folder) and start with a small amount.
 
 Connect an MCP client. Claude Code:
 
