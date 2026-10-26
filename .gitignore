@@ -18,3 +18,7 @@
 *.seed
 .env
 .env.*
+
+# Local media and design handoffs
+*.mp4
+*.zip
