@@ -1191,6 +1191,11 @@ fn owner_error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// An error about one form field; the owner window shows it under that field.
+fn owner_field_error(status: StatusCode, field: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": message, "field": field }))).into_response()
+}
+
 /// Password attempts slow down after a few failures. The counter is stored, so a
 /// restart does not reset it.
 fn login_delay(d: &Daemon) -> i64 {
@@ -1234,8 +1239,9 @@ fn record_password_result(d: &Daemon, ok: bool) {
 async fn check_password(d: &Daemon, password: String) -> Result<Arc<UnlockedKeys>, Response> {
     let wait = login_delay(d);
     if wait > 0 {
-        return Err(owner_error(
+        return Err(owner_field_error(
             StatusCode::TOO_MANY_REQUESTS,
+            "password",
             &format!("too many wrong passwords, try again in {wait} s"),
         ));
     }
@@ -1246,7 +1252,7 @@ async fn check_password(d: &Daemon, password: String) -> Result<Arc<UnlockedKeys
         }
         Err(_) => {
             record_password_result(d, false);
-            Err(owner_error(StatusCode::UNAUTHORIZED, "wrong password"))
+            Err(owner_field_error(StatusCode::UNAUTHORIZED, "password", "wrong password"))
         }
     }
 }
@@ -1378,7 +1384,7 @@ struct ImportBody {
 async fn owner_import(State(d): State<Shared>, Json(body): Json<ImportBody>) -> Response {
     match d.import_bill(&body.uri, "owner") {
         Ok((id, new)) => Json(json!({ "bill_id": id, "new": new })).into_response(),
-        Err(e) => owner_error(StatusCode::UNPROCESSABLE_ENTITY, e.describe()),
+        Err(e) => owner_field_error(StatusCode::UNPROCESSABLE_ENTITY, "uri", e.describe()),
     }
 }
 
@@ -1404,27 +1410,35 @@ async fn owner_approve(
     }
     let label = body.label.trim().to_string();
     if label.is_empty() {
-        return owner_error(
+        return owner_field_error(
             StatusCode::UNPROCESSABLE_ENTITY,
+            "label",
             "type a short label the model will see, for example Logo #17; the agent finds the bill by it",
         );
     }
     if label.chars().count() > MAX_LABEL_LEN || dto::leaks(&json!(label)) {
-        return owner_error(
+        return owner_field_error(
             StatusCode::UNPROCESSABLE_ENTITY,
+            "label",
             "the label must be short text without addresses; the model will see it",
         );
     }
     let contact_id = body.contact_id.filter(|c| !c.is_empty()).or(bill.contact_id.clone());
     if let Some(cid) = &contact_id {
         if d.store.contact(cid).ok().flatten().is_none() {
-            return owner_error(StatusCode::UNPROCESSABLE_ENTITY, "no such contact");
+            return owner_field_error(StatusCode::UNPROCESSABLE_ENTITY, "contact", "no such contact");
         }
     }
     let fee_limit = match body.fee_limit_zec.as_deref() {
         Some(s) if !s.trim().is_empty() => match parse_zec(s) {
             Some(v) => v,
-            None => return owner_error(StatusCode::UNPROCESSABLE_ENTITY, "bad fee limit"),
+            None => {
+                return owner_field_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "fee_limit",
+                    "the fee limit must be an amount like 0.0005",
+                )
+            }
         },
         _ => DEFAULT_FEE_LIMIT,
     };
@@ -1506,18 +1520,30 @@ struct ContactBody {
 
 async fn owner_add_contact(State(d): State<Shared>, Json(body): Json<ContactBody>) -> Response {
     let local_name = body.local_name.trim().to_string();
-    let alias = body
-        .alias
-        .map(|a| a.trim().to_string())
-        .filter(|a| !a.is_empty())
-        .unwrap_or_else(|| local_name.clone());
-    if local_name.is_empty() || alias.chars().count() > MAX_LABEL_LEN || dto::leaks(&json!(alias)) {
-        return owner_error(StatusCode::UNPROCESSABLE_ENTITY, "bad name or alias");
+    if local_name.is_empty() {
+        return owner_field_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "local_name",
+            "type a name for this contact; only you see it",
+        );
+    }
+    let alias_given = body.alias.as_deref().map(str::trim).filter(|a| !a.is_empty());
+    let alias = alias_given.unwrap_or(&local_name).to_string();
+    if alias.chars().count() > MAX_LABEL_LEN || dto::leaks(&json!(alias)) {
+        let (field, message) = match alias_given {
+            Some(_) => ("alias", "the alias must be short text without addresses; the model will see it"),
+            None => (
+                "local_name",
+                "with no alias the model sees this name, so it must be short text without addresses",
+            ),
+        };
+        return owner_field_error(StatusCode::UNPROCESSABLE_ENTITY, field, message);
     }
     for address in &body.addresses {
         if d.wallet.check_recipient(address).is_err() {
-            return owner_error(
+            return owner_field_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
+                "addresses",
                 "each address must be a unified address with an Orchard receiver on this network",
             );
         }
@@ -1528,7 +1554,11 @@ async fn owner_add_contact(State(d): State<Shared>, Json(body): Json<ContactBody
         .add_contact(&local_name, &alias, delivery_dir.as_deref(), &body.addresses)
     {
         Ok(id) => Json(json!({ "contact_id": id })).into_response(),
-        Err(_) => owner_error(StatusCode::CONFLICT, "could not add the contact (address already used?)"),
+        Err(_) => owner_field_error(
+            StatusCode::CONFLICT,
+            "addresses",
+            "could not add the contact; is one of these addresses already saved for another contact?",
+        ),
     }
 }
 
@@ -1561,7 +1591,13 @@ async fn owner_settings(State(d): State<Shared>, Json(body): Json<SettingsBody>)
                 let _ = d.store.set_kv("daily_limit", &v.to_string());
                 let _ = d.store.log("owner_daily_limit_changed", None, None);
             }
-            None => return owner_error(StatusCode::UNPROCESSABLE_ENTITY, "bad daily limit"),
+            None => {
+                return owner_field_error(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "daily_limit",
+                    "the daily limit must be an amount like 0.01, or 0 so the agent can pay nothing",
+                )
+            }
         }
     }
     if let Some(paused) = body.paused {

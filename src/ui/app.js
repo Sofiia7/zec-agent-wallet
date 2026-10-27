@@ -37,11 +37,25 @@ async function api(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   if (method !== 'GET' && csrf) opts.headers['x-csrf-token'] = csrf;
-  const res = await fetch('/api/owner' + path, opts);
+  let res;
+  try { res = await fetch('/api/owner' + path, opts); } catch (_) {
+    throw new Error('the wallet is not answering; check that zaw daemon is still running');
+  }
   let data = null;
   try { data = await res.json(); } catch (_) { data = null; }
-  if (res.status === 401 && path !== '/login') { csrf = null; renderLogin(); throw new Error('login required'); }
-  if (!res.ok) throw new Error((data && data.error) || ('request failed: ' + res.status));
+  // A wrong password names its field; only a 401 without one means the session ended.
+  if (res.status === 401 && !(data && data.field)) {
+    csrf = null;
+    renderLogin();
+    const e = new Error('login required');
+    e.login = true;
+    throw e;
+  }
+  if (!res.ok) {
+    const e = new Error((data && data.error) || ('request failed: ' + res.status));
+    e.field = data && data.field;
+    throw e;
+  }
   return data;
 }
 
@@ -70,9 +84,113 @@ function coin() {
 
 function errorLine() { return h('div', { class: 'err', role: 'alert' }); }
 
-async function withError(errEl, fn) {
-  errEl.textContent = '';
-  try { await fn(); } catch (e) { errEl.textContent = e.message; }
+// Daemon messages are lower-case fragments; show them as sentences.
+function sentence(s) {
+  s = String(s || '').trim();
+  if (!s) return s;
+  s = s[0].toUpperCase() + s.slice(1);
+  return /[.!?]$/.test(s) ? s : s + '.';
+}
+
+// Amounts as the daemon reads them; a comma works as the decimal point too.
+function amount(v) { return v.trim().replace(',', '.'); }
+
+function amountProblem(v, example, zeroOk) {
+  const s = amount(v);
+  if (!/^(\d+(\.\d{0,8})?|\.\d{1,8})$/.test(s)) return `Type an amount like ${example}: digits and one point, at most 8 digits after it`;
+  if (Number(s) === 0 && !zeroOk) return 'The amount must be more than 0';
+  if (Number(s) > 21e6) return 'That is more than all the ZEC there is';
+  return '';
+}
+
+// ---- forms and messages --------------------------------------------------------
+// Every field says whether it is required and shows its own error right under it.
+
+let fieldSeq = 0;
+
+function field(name, text, input, opts = {}) {
+  const id = `f${++fieldSeq}`;
+  input.id = id;
+  input.setAttribute('aria-describedby', `${id}-err`);
+  const f = { name, input, optional: !!opts.optional, empty: opts.empty, check: opts.check };
+  f.err = h('div', { class: 'ferr', id: `${id}-err` });
+  f.el = h('div', { class: 'f' + (opts.wide ? ' wide' : '') },
+    h('label', { class: 'fl', for: id }, text,
+      h('span', { class: opts.optional ? 'mark' : 'mark must' }, opts.optional ? 'optional' : 'required')),
+    opts.after ? h('div', { class: 'frow' }, input, opts.after) : input,
+    opts.hint ? h('div', { class: 'hint' }, opts.hint) : null,
+    f.err);
+  input.addEventListener('input', () => setFieldError(f, ''));
+  return f;
+}
+
+function setFieldError(f, message) {
+  f.err.textContent = message ? sentence(message) : '';
+  f.el.classList.toggle('invalid', !!message);
+  if (message) f.input.setAttribute('aria-invalid', 'true');
+  else f.input.removeAttribute('aria-invalid');
+}
+
+// Checks the fields, then runs the request. The button says what is happening while
+// it runs. An error goes under the field the daemon names, otherwise into the box.
+async function submit(fields, box, button, busy, fn) {
+  box.textContent = '';
+  const summary = n => (fields.length > 1 ? (n === 1 ? 'Check the field marked in red.' : `Check the ${n} fields marked in red.`) : '');
+  const bad = [];
+  for (const f of fields) {
+    const v = f.input.value.trim();
+    const problem = !v ? (f.optional ? '' : f.empty || 'Fill in this field') : (f.check && f.check(v)) || '';
+    setFieldError(f, problem);
+    if (problem) bad.push(f);
+  }
+  if (bad.length) {
+    box.textContent = summary(bad.length);
+    bad[0].input.focus();
+    return;
+  }
+  const text = button.textContent;
+  button.disabled = true;
+  button.textContent = busy;
+  try {
+    await fn();
+  } catch (e) {
+    const f = fields.find(x => x.name === e.field);
+    if (f) {
+      setFieldError(f, e.message);
+      box.textContent = summary(1);
+      f.input.focus();
+    } else if (!e.login) {
+      box.textContent = sentence(e.message);
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = text;
+  }
+}
+
+// A short message at the top of the window: what just happened, or why it did not.
+function flash(kind, text) {
+  for (const old of document.querySelectorAll('.flash')) old.remove();
+  const el = h('div', { class: `flash ${kind}`, role: kind === 'bad' ? 'alert' : 'status' }, h('span', {}, text));
+  el.append(h('button', { class: 'x', type: 'button', 'aria-label': 'Close', onclick: () => el.remove() }, '×'));
+  document.body.append(el);
+  setTimeout(() => el.remove(), kind === 'bad' ? 15000 : 5000);
+}
+
+// Buttons outside forms: a result or a failure is always shown.
+function act(fn, done) {
+  return async (ev) => {
+    const button = ev.currentTarget;
+    button.disabled = true;
+    try {
+      await fn();
+      if (done) flash('ok', done);
+    } catch (e) {
+      if (!e.login) flash('bad', sentence(e.message));
+    } finally {
+      button.disabled = false;
+    }
+  };
 }
 
 // ---- theme -----------------------------------------------------------------
@@ -196,26 +314,27 @@ function activity() {
 // ---- login -----------------------------------------------------------------
 
 function renderLogin() {
-  const pw = h('input', { type: 'password', id: 'pw', class: 'u', autocomplete: 'current-password', placeholder: 'Password' });
-  const err = errorLine();
-  const form = h('form', {},
+  const pw = field('password', 'Wallet password', h('input', { type: 'password', class: 'u', autocomplete: 'current-password' }),
+    { empty: 'Type the wallet password', hint: 'The password you chose when you ran zaw init.' });
+  const box = errorLine();
+  const button = h('button', { class: 'pill ink', type: 'submit' }, 'Unlock');
+  const form = h('form', { novalidate: true },
     h('div', { class: 'eyebrow' }, 'Owner window'),
     h('h1', {}, 'Unlock'),
     h('p', {}, 'The password decrypts the seed. While unlocked, the agent can pay bills you approved; nothing else.'),
-    pw, err,
-    h('button', { class: 'pill ink', type: 'submit' }, 'Unlock'));
+    pw.el, box, button);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    withError(err, async () => {
-      const res = await api('POST', '/login', { password: pw.value });
+    submit([pw], box, button, 'Unlocking…', async () => {
+      const res = await api('POST', '/login', { password: pw.input.value });
       csrf = res.csrf;
-      pw.value = '';
+      pw.input.value = '';
       start();
     });
   });
   document.getElementById('root').replaceChildren(
     h('div', { class: 'login' }, h('div', { class: 'brand' }, h('b', {}, 'Zec Agent Wallet')), form));
-  pw.focus();
+  pw.input.focus();
 }
 
 // ---- sidebar ---------------------------------------------------------------
@@ -244,7 +363,8 @@ function renderSide() {
         h('span', {}, 'Agent'), h('span', {}, agent)),
       h('button', {
         class: 'pill side-stop',
-        onclick: async () => { await api('POST', '/settings', { paused: !o.paused }); await refresh(); },
+        onclick: act(async () => { await api('POST', '/settings', { paused: !o.paused }); await refresh(); },
+          o.paused ? 'Agent payments resumed.' : 'Agent payments stopped. The agent cannot pay until you resume them.'),
       }, o.paused ? 'Resume agent payments' : 'Stop agent payments'),
       h('button', { class: 'theme', onclick: () => { applyTheme(dark ? 'light' : 'dark'); render(); } }, dark ? 'Light mode' : 'Dark mode')));
 }
@@ -259,31 +379,41 @@ function limitBlock() {
   if (ui.limitDraft === null) ui.limitDraft = zec(limit);
   const presets = c === 'ZEC' ? ['0', '0.0015', '0.005', '0.01'] : ['0', '0.01', '0.05', '0.1'];
   const input = h('input', { value: ui.limitDraft, inputmode: 'decimal', 'aria-label': 'Daily limit' });
-  input.addEventListener('input', () => { ui.limitDraft = input.value; ui.limitSaved = false; });
+  const numIn = h('div', { class: 'num-in' }, input, h('span', {}, c));
+  const lim = {
+    name: 'daily_limit', input, el: numIn, err: h('div', { class: 'ferr' }),
+    empty: 'Type an amount, or 0 so the agent can pay nothing',
+    check: v => amountProblem(v, c === 'ZEC' ? '0.005' : '0.05', true),
+  };
+  input.addEventListener('input', () => { ui.limitDraft = input.value; ui.limitSaved = false; setFieldError(lim, ''); });
   const meter = h('i');
   meter.style.width = limit ? `${Math.round((left / limit) * 100)}%` : '0%';
   const err = errorLine();
+  const save = h('button', { class: 'pill ink save', type: 'submit' }, ui.limitSaved ? 'Saved ✓' : 'Save');
+  const form = h('form', { class: 'controls', novalidate: true },
+    presets.map(v => h('button', {
+      class: 'chip' + (ui.limitDraft === v ? ' on' : ''), type: 'button',
+      onclick: () => { ui.limitDraft = v; ui.limitSaved = false; render(); },
+    }, v === '0' ? 'Off (0)' : `${v} ${c}`)),
+    numIn, save);
+  form.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    submit([lim], err, save, 'Saving…', async () => {
+      const v = amount(input.value);
+      const zero = Number(v) === 0;
+      await api('POST', '/settings', { daily_limit_zec: zero ? '0' : v });
+      ui.limitSaved = true;
+      ui.limitDraft = null;
+      flash('ok', zero ? 'Daily limit set to 0: the agent can pay nothing.' : `Daily limit saved: ${v} ${c} a day.`);
+      await refresh();
+    });
+  });
   return h('div', {},
     h('div', { class: 'spread' }, h('span', { class: 'eyebrow' }, 'Daily limit · agent'), h('span', { class: 'small faint' }, 'resets every 24 h')),
     h('div', { class: 'big' }, h('b', {}, zec(left)), h('span', {}, `of ${zec(limit)} ${c} left today`)),
     h('div', { class: 'meter' }, meter),
     h('div', { class: 'help' }, 'Fees included. Even under the limit the agent pays only bills you approved.'),
-    h('div', { class: 'controls' },
-      presets.map(v => h('button', {
-        class: 'chip' + (ui.limitDraft === v ? ' on' : ''),
-        onclick: () => { ui.limitDraft = v; ui.limitSaved = false; render(); },
-      }, v === '0' ? 'Off (0)' : `${v} ${c}`)),
-      h('div', { class: 'num-in' }, input, h('span', {}, c)),
-      h('button', {
-        class: 'pill ink save',
-        onclick: () => withError(err, async () => {
-          await api('POST', '/settings', { daily_limit_zec: ui.limitDraft });
-          ui.limitSaved = true;
-          ui.limitDraft = null;
-          await refresh();
-        }),
-      }, ui.limitSaved ? 'Saved ✓' : 'Save')),
-    err);
+    form, lim.err, err);
 }
 
 function needsBlock() {
@@ -393,46 +523,57 @@ function approveForm(b) {
   const c = coin();
   const contacts = cache.contacts || [];
   // Prefilled with neutral text, never with the sender's label: that text must not reach the model.
-  const label = h('input', { class: 'u', value: b.bill.label || `Bill for ${zec(b.bill.amount)} ${c}`, maxlength: 80, placeholder: 'e.g. Logo #17' });
-  const contact = h('select', { class: 'u' },
-    h('option', { value: '' }, 'No contact'),
-    ...contacts.map(ct => h('option', { value: ct.id, selected: b.bill.contact_id === ct.id }, `${ct.local_name} (agent sees "${ct.alias}")`)));
-  const fee = h('input', { class: 'u mono', value: '0.0005', inputmode: 'decimal' });
-  const hours = h('input', { class: 'u mono', value: '168', inputmode: 'numeric' });
-  const pw = h('input', { class: 'u', type: 'password', autocomplete: 'current-password' });
+  const label = field('label', 'Label the agent sees',
+    h('input', { class: 'u', value: b.bill.label || `Bill for ${zec(b.bill.amount)} ${c}`, maxlength: 80, placeholder: 'e.g. Logo #17' }),
+    { empty: 'Type a short label, for example "Logo #17"', hint: 'The agent finds the bill by this name. No addresses.' });
+  const contact = field('contact', 'Contact',
+    h('select', { class: 'u' },
+      h('option', { value: '' }, 'No contact'),
+      ...contacts.map(ct => h('option', { value: ct.id, selected: b.bill.contact_id === ct.id }, `${ct.local_name} (agent sees "${ct.alias}")`))),
+    { optional: true, hint: 'Who gets the money; the agent sees only the alias.' });
+  const fee = field('fee_limit', `Fee limit, ${c}`, h('input', { class: 'u mono', value: '0.0005', inputmode: 'decimal' }),
+    { empty: 'Type the most the fee may be, for example 0.0005', check: v => amountProblem(v, '0.0005'), hint: 'The most the network fee may be. 0.0005 is plenty.' });
+  const hours = field('hours', 'Valid for, hours', h('input', { class: 'u mono', value: '168', inputmode: 'numeric' }),
+    {
+      empty: 'Type how many hours the approval lasts, for example 168',
+      check: v => (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 2160 ? '' : 'Whole hours from 1 to 2160 (90 days)'),
+      hint: 'After this the agent can no longer pay it. 168 hours is a week.',
+    });
+  const pw = field('password', 'Wallet password', h('input', { class: 'u', type: 'password', autocomplete: 'current-password' }),
+    { wide: true, empty: 'Type the wallet password to approve', hint: 'Needed for every approval, so the agent cannot approve anything itself.' });
   const err = errorLine();
-  const form = h('form', { class: 'approve' },
-    h('label', { class: 'f' }, 'Label the agent sees', label),
-    h('label', { class: 'f' }, 'Contact', contact),
-    h('label', { class: 'f' }, `Fee limit, ${c}`, fee),
-    h('label', { class: 'f' }, 'Valid for, hours', hours),
-    h('label', { class: 'f wide' }, 'Wallet password', pw),
+  const ok = h('button', { class: 'pill ink', type: 'submit' }, `Allow the agent to pay once: ${zec(b.bill.amount)} ${c}`);
+  const form = h('form', { class: 'approve', novalidate: true },
+    label.el, contact.el, fee.el, hours.el, pw.el,
     h('div', { class: 'wide' }, err),
     h('div', { class: 'btns wide' },
-      h('button', { class: 'pill ink', type: 'submit' }, `Allow the agent to pay once: ${zec(b.bill.amount)} ${c}`),
+      ok,
       h('button', {
         class: 'pill bad', type: 'button',
-        onclick: () => withError(err, async () => { await api('POST', `/bills/${b.bill.id}/reject`); ui.approving = null; await refresh(); }),
+        onclick: (ev) => submit([], err, ev.currentTarget, 'Rejecting…', async () => {
+          await api('POST', `/bills/${b.bill.id}/reject`);
+          ui.approving = null;
+          flash('ok', 'Rejected. The agent cannot pay this bill.');
+          await refresh();
+        }),
       }, 'Reject'),
       h('button', { class: 'link', type: 'button', onclick: () => { ui.approving = null; render(); } }, 'Cancel')),
     h('p', { class: 'wide' }, 'This approves only this bill, with this recipient, amount and memo. It does not create a rule, raise a limit or change a contact.'));
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    withError(err, async () => {
-      if (!label.value.trim()) {
-        label.focus();
-        throw new Error('Type a short label the agent will see, for example "Logo #17". The agent finds the bill by it.');
-      }
+    submit([label, contact, fee, hours, pw], err, ok, 'Checking the password…', async () => {
+      const name = label.input.value.trim();
       await api('POST', `/bills/${b.bill.id}/approve`, {
-        password: pw.value, label: label.value, contact_id: contact.value || null,
-        fee_limit_zec: fee.value, expires_hours: Number(hours.value) || 168,
+        password: pw.input.value, label: name, contact_id: contact.input.value || null,
+        fee_limit_zec: amount(fee.input.value), expires_hours: Number(hours.input.value),
       });
-      pw.value = '';
+      pw.input.value = '';
       ui.approving = null;
+      flash('ok', `Approved. The agent can pay “${name}” once.`);
       await refresh();
     });
   });
-  setTimeout(() => pw.focus(), 0);
+  setTimeout(() => pw.input.focus(), 0);
   return form;
 }
 
@@ -451,7 +592,8 @@ function billRow(b) {
         s === 'needs' && ui.approving !== id ? h('button', { class: 'pill ink sm', onclick: () => { ui.approving = id; render(); } }, 'Approve') : null,
         s === 'approved' && b.approval ? h('button', {
           class: 'pill bad sm',
-          onclick: async () => { await api('POST', `/approvals/${b.approval.id}/revoke`); await refresh(); },
+          onclick: act(async () => { await api('POST', `/approvals/${b.approval.id}/revoke`); await refresh(); },
+            'Approval revoked. The agent can no longer pay this bill.'),
         }, 'Revoke') : null,
         h('button', {
           class: 'round', title: 'What the agent sees', 'aria-label': 'What the agent sees',
@@ -482,19 +624,23 @@ function requestRow(r) {
 }
 
 function addBillForm() {
-  const uri = h('input', { class: 'u mono', placeholder: 'zcash:u1…?amount=0.005  (one Orchard recipient)', 'aria-label': 'Payment link' });
+  const prefix = coin() === 'ZEC' ? 'zcash:u1…' : 'zcash:utest1…';
+  const button = h('button', { class: 'pill ink', type: 'submit' }, 'Add bill');
+  const uri = field('uri', 'Payment link', h('input', { class: 'u mono', placeholder: `${prefix}?amount=0.005` }), {
+    after: button,
+    empty: 'Paste the payment link the payee sent you (it starts with zcash:)',
+    check: v => (v.toLowerCase().startsWith('zcash:') ? '' : 'A payment link starts with “zcash:”'),
+    hint: 'The link or QR text the payee sent you: one Orchard recipient and an amount.',
+  });
   const err = errorLine();
-  const form = h('form', {},
-    h('div', { class: 'addrow' }, uri, h('button', { class: 'pill ink', type: 'submit' }, 'Add bill')),
-    err);
+  const form = h('form', { class: 'addbill', novalidate: true }, uri.el, err);
   form.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    withError(err, async () => {
-      const v = uri.value.trim();
-      if (!v.toLowerCase().startsWith('zcash:')) throw new Error('That doesn’t look like a payment link - it should start with “zcash:”.');
-      await api('POST', '/bills/import', { uri: v });
-      uri.value = '';
+    submit([uri], err, button, 'Adding…', async () => {
+      const res = await api('POST', '/bills/import', { uri: uri.input.value.trim() });
+      uri.input.value = '';
       ui.filter = 'all';
+      flash('ok', res.new ? 'Bill added. Approve it below if the agent should pay it.' : 'This bill is already in the list.');
       await refresh();
     });
   });
@@ -539,28 +685,39 @@ function renderActivity() {
 
 function renderSettings() {
   const o = cache.overview;
-  const name = h('input', { class: 'u', placeholder: 'Name - only you see it' });
-  const alias = h('input', { class: 'u', placeholder: 'Alias the agent sees' });
-  const addr = h('input', { class: 'u mono wide', placeholder: 'Unified address u1… (optional; several separated by spaces)' });
-  const folder = h('input', { class: 'u wide', placeholder: 'Folder to deliver payment requests to (optional)' });
+  const prefix = coin() === 'ZEC' ? 'u1' : 'utest1';
+  const name = field('local_name', 'Name', h('input', { class: 'u', placeholder: 'e.g. Anna, designer' }),
+    { empty: 'Type a name for this contact', hint: 'Only you see it.' });
+  const alias = field('alias', 'Alias the agent sees', h('input', { class: 'u', placeholder: 'e.g. designer' }),
+    { optional: true, hint: 'Goes to the model provider. Left empty, the agent sees the name.' });
+  const addr = field('addresses', 'Addresses', h('input', { class: 'u mono', placeholder: `${prefix}…` }), {
+    optional: true, wide: true,
+    check: v => (v.split(/[\s,]+/).filter(Boolean).every(a => a.startsWith(prefix)) ? '' : `Each address starts with ${prefix}; separate several with spaces`),
+    hint: 'This contact’s unified addresses, separated by spaces. A bill to a saved address is marked as matching.',
+  });
+  const folder = field('delivery_dir', 'Folder for payment requests', h('input', { class: 'u' }),
+    { optional: true, wide: true, hint: 'When the agent asks this contact for money, the request file is written here.' });
   const cErr = errorLine();
-  const contactForm = h('form', { class: 'cform' }, name, alias, addr, folder, h('div', { class: 'wide' }, cErr),
-    h('button', { class: 'pill ink wide', type: 'submit' }, 'Add contact'));
+  const add = h('button', { class: 'pill ink wide', type: 'submit' }, 'Add contact');
+  const contactForm = h('form', { class: 'cform', novalidate: true }, name.el, alias.el, addr.el, folder.el, h('div', { class: 'wide' }, cErr), add);
   contactForm.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    withError(cErr, async () => {
+    submit([name, alias, addr, folder], cErr, add, 'Adding…', async () => {
       await api('POST', '/contacts', {
-        local_name: name.value, alias: alias.value || null, delivery_dir: folder.value || null,
-        addresses: addr.value.split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
+        local_name: name.input.value.trim(), alias: alias.input.value.trim() || null, delivery_dir: folder.input.value.trim() || null,
+        addresses: [...new Set(addr.input.value.split(/[\s,]+/).filter(Boolean))],
       });
-      name.value = alias.value = folder.value = addr.value = '';
+      flash('ok', 'Contact added.');
       await refresh();
     });
   });
   const copy = h('button', {
     class: 'pill ghost sm',
     onclick: async () => {
-      try { await navigator.clipboard.writeText('zaw mcp'); } catch (_) { return; }
+      try { await navigator.clipboard.writeText('zaw mcp'); } catch (_) {
+        flash('bad', 'Could not copy. Select the command and copy it by hand.');
+        return;
+      }
       ui.copied = true; render();
       setTimeout(() => { ui.copied = false; render(); }, 1500);
     },
@@ -579,7 +736,10 @@ function renderSettings() {
     h('div', { class: 'set three' }, h('b', {}, 'Lock wallet'),
       h('span', { class: 'muted' }, 'Clears the spending key from memory. No payments until you unlock.'),
       o.unlocked
-        ? h('button', { class: 'pill bad', onclick: async () => { await api('POST', '/lock'); await refresh(); } }, 'Lock')
+        ? h('button', {
+          class: 'pill bad',
+          onclick: act(async () => { await api('POST', '/lock'); await refresh(); }, 'Wallet locked. The agent cannot pay until you unlock it.'),
+        }, 'Lock')
         : h('button', { class: 'pill ink', onclick: () => renderLogin() }, 'Unlock')),
     h('div', { class: 'set' }, h('b', {}, 'Connect an agent'),
       h('div', {},
@@ -597,20 +757,32 @@ async function refresh(auto) {
   render(auto);
 }
 
+// A form with typed text or a shown error, which a background refresh must not wipe.
+function formInUse(root) {
+  if (root.querySelector('.ferr:not(:empty), .err:not(:empty)')) return true;
+  return [...root.querySelectorAll('input, textarea')].some(el => el.value !== el.defaultValue)
+    || [...root.querySelectorAll('select')].some(s => [...s.options].some(o => o.selected !== o.defaultSelected));
+}
+
 function render(auto) {
   if (!cache.overview) return;
   const root = document.getElementById('root');
   // Keep typed text: background refreshes do not re-render while a form is being filled.
   if (auto && document.activeElement && root.contains(document.activeElement) && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
-  if (auto && ui.approving) return;
+  if (auto && (ui.approving || formInUse(root))) return;
   const views = { overview: renderOverview, bills: renderBills, activity: renderActivity, settings: renderSettings };
   const main = h('main', {}, views[ui.screen]());
   root.replaceChildren(h('div', { class: 'app' }, renderSide(), main));
 }
 
+// A failed refresh says so; otherwise the window would quietly show old data.
+function refreshFailed(e) {
+  if (!e.login) flash('bad', sentence(e.message));
+}
+
 function start() {
-  refresh().catch(() => {});
-  if (!window.__poll) window.__poll = setInterval(() => { if (csrf) refresh(true).catch(() => {}); }, 10000);
+  refresh().catch(refreshFailed);
+  if (!window.__poll) window.__poll = setInterval(() => { if (csrf) refresh(true).catch(refreshFailed); }, 10000);
 }
 
 (async () => {
