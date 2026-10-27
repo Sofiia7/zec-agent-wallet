@@ -121,6 +121,15 @@ select.u option { background: var(--panel); color: var(--ink); }
 .amount b { font-size: 76px; font-weight: 700; letter-spacing: -0.045em; line-height: 1; }
 .amount span { font-size: 30px; font-weight: 500; color: var(--ink3); }
 .hero .sub { margin-top: 12px; font-size: 14px; color: var(--ink2); }
+.usdline { margin-top: 8px; font-size: 16px; color: var(--ink2); }
+.usd { display: block; font: 11.5px var(--sans); color: var(--ink3); }
+.hero-acts { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.topup { margin-top: 22px; padding-top: 20px; border-top: 1px dashed var(--line); display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 28px; align-items: start; }
+.topup .qr { display: block; width: 216px; height: 216px; padding: 8px; background: #ffffff; }
+.addr-big { margin-top: 10px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; user-select: all; }
+.topup .controls { margin-top: 14px; }
+.steps { margin: 16px 0 0; padding-left: 18px; font-size: 13px; line-height: 1.55; color: var(--ink2); max-width: 640px; }
+.steps li + li { margin-top: 4px; }
 .duo { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); }
 .duo.ruled { border-bottom: 1px solid var(--rule); }
 .duo > :first-child { padding: 28px 32px 28px 0; border-right: 1px solid var(--line); }
@@ -260,6 +269,8 @@ select.u option { background: var(--panel); color: var(--ink); }
   .log .det { text-align: left; }
   .set, .set.three { grid-template-columns: 1fr; gap: 12px; }
   .cform { grid-template-columns: 1fr; }
+  .topup { grid-template-columns: 1fr; gap: 16px; }
+  .topup .qr { width: 100%; max-width: 260px; height: auto; }
   .flash { left: 16px; right: 16px; top: 12px; max-width: none; }
   .pg { padding: 24px 16px 40px; }
   .pg-grid { grid-template-columns: 1fr; }

@@ -12,6 +12,8 @@ A local Zcash wallet that lets an AI agent pay owner-approved bills in shielded 
 - Payment requests (`request_payment`) on a fresh address per request, delivered to a folder or handed to the owner, and `check_request` that matches incoming funds by address and confirmations.
 - `zaw mcp`: an MCP server over stdio with 9 tools. It holds no keys and returns only aliases, owner-set labels, amounts and statuses. Every response is checked for anything that looks like an address, key or transaction id before it leaves the process.
 - A local owner window: bills with their approval state (needs you, approved, paid), the sender's text and the address shown only to the owner, payment requests, a daily limit, a stop button for agent payments, a plain-language activity log, and for each bill the exact response the model receives.
+- Optional amounts in USD on mainnet: off until the owner turns them on. The daemon then fetches the ZEC price every 10 minutes on a timer (not around payments); the owner and the agent see approximate dollars, while approvals, limits and payments stay in ZEC.
+- Top up from the owner window: a fresh receive address with its QR code for any shielded Zcash wallet. The agent never sees it.
 - `scripts/leak_check.py`: feeds canary strings and an address through a bill's memo, label and message and checks every agent API and MCP output, including stderr.
 
 End to end on testnet: one agent issued a bill, the other side's owner approved it, its agent paid it, and the first agent saw it paid after 3 confirmations.
@@ -23,6 +25,7 @@ Once on mainnet (26 Oct 2026): the same flow between two wallets, with the payer
 - The aliases, labels and amounts the model does see reach the model provider. The agent may also learn things from its other tools (email, browser).
 - An agent that can run shell commands or read files as the same OS user (for example a coding agent) can read the wallet's local data. If your agent can run commands, run the wallet daemon as a separate OS user.
 - A light client trusts its lightwalletd server for chain data, and the server sees your IP address.
+- With USD amounts on, the price service (Coinbase, or Kraken as a fallback) sees your IP address every 10 minutes.
 
 See [docs/design.md](docs/design.md) for the approval model, failure handling and threat model.
 

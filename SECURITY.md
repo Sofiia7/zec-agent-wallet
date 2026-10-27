@@ -14,6 +14,7 @@ Please report privately through GitHub: Security → Report a vulnerability on t
 | Owner window | Approvals, settings | Password login, HttpOnly SameSite=Strict session cookie, CSRF token, Host and Origin checks, strict CSP, no framing |
 | MCP server (`zaw mcp`) | Nothing secret: an agent API token | Cannot approve, unlock, change limits or recipients; the owner API rejects its token |
 | lightwalletd server | Chain data | Cannot spend; sees IP and queries; a malicious server could show an incoming payment that is not on chain |
+| ZEC/USD price service (Coinbase, Kraken as fallback) | A display price, only while the owner has USD amounts on (mainnet) | Fixed HTTPS URLs, nothing taken from input, so no SSRF; the reply must be a plain decimal within sane bounds; a wrong price changes only displayed dollars, never an amount paid; sees the IP address every 10 minutes |
 
 The full threat model, including what is out of scope (an agent with shell access as the same OS user, computer use, root), is in [docs/design.md](docs/design.md#threat-model).
 

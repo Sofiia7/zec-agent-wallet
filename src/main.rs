@@ -3,6 +3,7 @@ mod dto;
 mod invoice;
 mod mcp;
 mod policy;
+mod price;
 mod store;
 mod wallet;
 

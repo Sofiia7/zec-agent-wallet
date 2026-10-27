@@ -55,11 +55,13 @@ MCP tools: `wallet_status`, `list_contacts`, `list_bills`, `request_approval`, `
 
 The boundary is enforced by types: the agent API and the MCP server serialise only the types in `src/dto.rs`, which have no fields for addresses, memos, counterparty text, txids or paths. As a last line of defence, every agent response and every MCP result is scanned for anything that looks like a Zcash address, key or 64-hex value and replaced by an error if found. `scripts/leak_check.py` feeds canary strings through memo, label and message and checks every agent and MCP output, including stderr.
 
+Amounts are in ZEC. If the owner turns on USD amounts (mainnet only), each amount also carries `usd_approx`, computed from a ZEC/USD price the daemon fetches from Coinbase (Kraken if Coinbase fails) every 10 minutes on a fixed timer, never around a payment. A price older than an hour is not shown. Approvals, limits and payments stay in ZEC: the price changes only the displayed dollars, never what is paid.
+
 The MCP server is a small hand-written JSON-RPC layer (`src/mcp.rs`) so that every byte that can reach the model is produced in one auditable place. It holds no keys and no wallet data; it calls the daemon's agent API with its own token. The owner API never accepts that token.
 
 ## Owner window
 
-A local web page served by the daemon on 127.0.0.1: overview (balance, daily limit, bills waiting for a decision), bills (approval is a state of the bill: needs you, approved, paid; own payment requests below), activity in plain sentences, and settings (contacts, lock, how to connect an agent). Each bill expands to show what only the owner sees (recipient check, address, sender text) next to the exact response the model gets. Text from counterparties is shown as plain text, marked as sender text.
+A local web page served by the daemon on 127.0.0.1: overview (balance, a Top up button with a fresh receive address and its QR code, daily limit, bills waiting for a decision), bills (approval is a state of the bill: needs you, approved, paid; own payment requests below), activity in plain sentences, and settings (contacts, lock, how to connect an agent). Each bill expands to show what only the owner sees (recipient check, address, sender text) next to the exact response the model gets. Text from counterparties is shown as plain text, marked as sender text. Every form marks its required fields and shows an error under the field it is about. Top-up addresses are shown only in the owner window; the agent never receives them.
 
 Protection: password login (the password decrypts the seed) with a growing delay after failures that survives restarts, an HttpOnly SameSite=Strict session cookie, a CSRF token on every change, Host and Origin checks, a strict Content Security Policy with no external resources, no framing.
 
@@ -79,6 +81,7 @@ Incoming payments for a request are matched by the request's own address, not by
 | Agent with shell or file access as the same OS user | Editing the database does not create an approval (HMAC) | Can read the wallet database (addresses, memos) and tokens, or interfere with the daemon process. Run the daemon as a separate OS user if your agent can run commands |
 | Computer use, root, malicious OS | - | Out of scope |
 | lightwalletd server | Cannot steal funds | Sees IP and queries; a malicious server could show an incoming payment that is not on chain (a light client limitation) |
+| Price service (only with USD amounts on) | Learns nothing about payments: requests run on a timer; a wrong price changes only the displayed dollars | Sees the IP address and that a wallet is running, every 10 minutes |
 
 ## Not in the first version
 

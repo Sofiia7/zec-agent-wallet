@@ -25,6 +25,7 @@ pub mod playground;
 use crate::dto::{self, NextAction};
 use crate::invoice::{self, format_zec, parse_zec};
 use crate::policy::{self, Reason, Snapshot};
+use crate::price;
 use crate::store::{self, Bill, Operation, Reservation, Store, new_id, now};
 use crate::wallet::{BuildRefusal, Net, RecipientError, SyncStatus, TxStatus, UnlockedKeys, Wallet};
 
@@ -62,6 +63,9 @@ pub struct Daemon {
     agent_token: String,
     notify: Notify,
     last_sync: Mutex<Option<SyncStatus>>,
+    /// The last ZEC/USD price, while the owner has USD amounts on.
+    usd: Mutex<Option<price::Quote>>,
+    price_wake: Notify,
     allowed_hosts: Vec<String>,
     /// Set when served over HTTPS behind a reverse proxy.
     secure_cookies: bool,
@@ -127,6 +131,8 @@ pub async fn run(dir: &Path, opts: Options) -> anyhow::Result<()> {
         agent_token: agent_token(dir)?,
         notify: Notify::new(),
         last_sync: Mutex::new(None),
+        usd: Mutex::new(None),
+        price_wake: Notify::new(),
         allowed_hosts,
         secure_cookies: opts.public_host.is_some(),
         playground: opts.playground.map(playground::Playground::new).transpose()?,
@@ -141,6 +147,7 @@ pub async fn run(dir: &Path, opts: Options) -> anyhow::Result<()> {
 
     tokio::spawn(daemon.clone().sync_loop());
     tokio::spawn(daemon.clone().executor_loop());
+    tokio::spawn(daemon.clone().price_loop());
 
     let app = router(daemon.clone());
     let listener = tokio::net::TcpListener::bind(&opts.listen)
@@ -175,6 +182,48 @@ impl Daemon {
 
     fn sync_status(&self) -> Option<SyncStatus> {
         self.last_sync.lock().ok().and_then(|s| *s)
+    }
+
+    /// USD amounts are shown only on mainnet, and only after the owner turns them on.
+    fn usd_on(&self) -> bool {
+        self.net == Net::Mainnet
+            && self.store.get_kv("usd_prices").ok().flatten().as_deref() == Some("1")
+    }
+
+    fn usd_quote(&self) -> Option<price::Quote> {
+        if !self.usd_on() {
+            return None;
+        }
+        let quote = self.usd.lock().ok().and_then(|q| *q)?;
+        (now() - quote.at <= price::MAX_AGE_SECS).then_some(quote)
+    }
+
+    /// Fetches the price every few minutes while USD amounts are on; the timer does
+    /// not depend on payments, so the requests say nothing about when the wallet pays.
+    async fn price_loop(self: Arc<Self>) {
+        let http = match price::client() {
+            Ok(http) => http,
+            Err(e) => {
+                tracing::warn!("price client: {e}");
+                return;
+            }
+        };
+        loop {
+            if self.usd_on() {
+                match price::fetch(&http).await {
+                    Ok((micro_usd_per_zec, source)) => {
+                        if let Ok(mut q) = self.usd.lock() {
+                            *q = Some(price::Quote { micro_usd_per_zec, at: now(), source });
+                        }
+                    }
+                    Err(e) => tracing::warn!("price: {e}"),
+                }
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(price::REFRESH) => {}
+                _ = self.price_wake.notified() => {}
+            }
+        }
     }
 
     async fn unlock(&self, password: String) -> anyhow::Result<Arc<UnlockedKeys>> {
@@ -468,7 +517,9 @@ impl Daemon {
     fn amount(&self, zat: u64) -> dto::Amount {
         dto::Amount {
             zec: format_zec(zat),
-            usd_approx: None,
+            usd_approx: self
+                .usd_quote()
+                .map(|q| price::usd_text(zat, q.micro_usd_per_zec)),
         }
     }
 
@@ -979,6 +1030,7 @@ fn router(daemon: Shared) -> Router {
         .route("/contacts", get(owner_contacts).post(owner_add_contact))
         .route("/requests", get(owner_requests))
         .route("/settings", post(owner_settings))
+        .route("/topup", post(owner_topup))
         .route("/events", get(owner_events))
         .layer(middleware::from_fn_with_state(daemon.clone(), require_owner));
 
@@ -1338,6 +1390,12 @@ async fn owner_overview(State(d): State<Shared>) -> Response {
         "needs_approval": bills.iter().filter(|b| b.status == "needs_approval").count(),
         "approval_requested": bills.iter().filter(|b| d.store.approval_requested(&b.id).unwrap_or(false) && b.status == "needs_approval").count(),
         "agent_view": d.agent_status(),
+        "usd_on": d.usd_on(),
+        "usd": d.usd_quote().map(|q| json!({
+            "micro_usd_per_zec": q.micro_usd_per_zec,
+            "at": q.at,
+            "source": q.source,
+        })),
     }))
     .into_response()
 }
@@ -1577,6 +1635,7 @@ async fn owner_requests(State(d): State<Shared>) -> Response {
 struct SettingsBody {
     daily_limit_zec: Option<String>,
     paused: Option<bool>,
+    usd_prices: Option<bool>,
 }
 
 async fn owner_settings(State(d): State<Shared>, Json(body): Json<SettingsBody>) -> Response {
@@ -1607,7 +1666,46 @@ async fn owner_settings(State(d): State<Shared>, Json(body): Json<SettingsBody>)
             .log(if paused { "owner_paused" } else { "owner_resumed" }, None, None);
         d.notify.notify_one();
     }
+    if let Some(on) = body.usd_prices {
+        if on && d.net != Net::Mainnet {
+            return owner_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "USD amounts are only for mainnet: test coins have no price",
+            );
+        }
+        let _ = d.store.set_kv("usd_prices", if on { "1" } else { "0" });
+        let _ = d
+            .store
+            .log(if on { "owner_usd_on" } else { "owner_usd_off" }, None, None);
+        if on {
+            d.price_wake.notify_one();
+        } else if let Ok(mut q) = d.usd.lock() {
+            *q = None;
+        }
+    }
     Json(json!({ "paused": d.paused(), "daily_limit": d.daily_limit() })).into_response()
+}
+
+/// A fresh receive address for the owner to top up the wallet, with its QR code.
+/// Owner API only: addresses never reach the agent.
+async fn owner_topup(State(d): State<Shared>) -> Response {
+    let address = {
+        let _guard = d.wallet_lock.lock().await;
+        d.wallet.new_receive_address()
+    };
+    let Ok(address) = address else {
+        return owner_error(StatusCode::INTERNAL_SERVER_ERROR, "could not make a new address");
+    };
+    let Ok(code) = qrcode::QrCode::with_error_correction_level(address.as_bytes(), qrcode::EcLevel::M) else {
+        return owner_error(StatusCode::INTERNAL_SERVER_ERROR, "could not draw the QR code");
+    };
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(232, 232)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build();
+    Json(json!({ "address": address, "qr_svg": svg })).into_response()
 }
 
 async fn owner_events(State(d): State<Shared>) -> Response {

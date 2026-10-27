@@ -12,7 +12,8 @@ use crate::policy::Reason;
 #[derive(Clone, Debug, Serialize)]
 pub struct Amount {
     pub zec: String,
-    /// Approximate, for scale only. Absent on testnet, where coins have no price.
+    /// Approximate dollars, for scale only. Present only when the owner turned USD
+    /// amounts on; never on testnet, where coins have no price.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usd_approx: Option<String>,
 }

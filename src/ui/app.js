@@ -13,6 +13,7 @@ const ui = {
   limitDraft: null,
   limitSaved: false,
   copied: false,
+  topup: null,          // null, 'loading' or { address, qr }
 };
 
 function h(tag, attrs, ...children) {
@@ -80,6 +81,21 @@ function stamp(unix) {
 
 function coin() {
   return cache.overview && cache.overview.network === 'mainnet' ? 'ZEC' : 'TAZ';
+}
+
+// Approximate dollars, only when the owner turned USD amounts on (mainnet only).
+function usd(zat) {
+  const q = cache.overview && cache.overview.usd;
+  if (!q || zat === null || zat === undefined) return '';
+  const micro = (zat * q.micro_usd_per_zec) / 1e8;
+  const cents = Math.round(micro / 1e4);
+  if (cents === 0 && micro > 0) return '≈ <$0.01';
+  return '≈ $' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function withUsd(text, zat) {
+  const u = usd(zat);
+  return u ? `${text} (${u})` : text;
 }
 
 function errorLine() { return h('div', { class: 'err', role: 'alert' }); }
@@ -287,6 +303,8 @@ function describe(e, index) {
     owner_daily_limit_changed: ['You changed the daily limit', 'You'],
     owner_paused: ['You stopped agent payments', 'You'],
     owner_resumed: ['You resumed agent payments', 'You'],
+    owner_usd_on: ['You turned on USD amounts', 'You'],
+    owner_usd_off: ['You turned off USD amounts', 'You'],
     inbox_file_rejected: ['A file in the inbox was not a valid bill', 'Wallet'],
     leak_blocked: ['Blocked a response to the agent that looked like an address or key', 'Wallet'],
   }[e.kind] || [e.kind.replace(/_/g, ' '), ''];
@@ -410,7 +428,8 @@ function limitBlock() {
   });
   return h('div', {},
     h('div', { class: 'spread' }, h('span', { class: 'eyebrow' }, 'Daily limit · agent'), h('span', { class: 'small faint' }, 'resets every 24 h')),
-    h('div', { class: 'big' }, h('b', {}, zec(left)), h('span', {}, `of ${zec(limit)} ${c} left today`)),
+    h('div', { class: 'big' }, h('b', {}, zec(left)), h('span', {}, `of ${zec(limit)} ${c} left today`),
+      usd(left) ? h('span', { class: 'faint' }, `${usd(left)} left`) : null),
     h('div', { class: 'meter' }, meter),
     h('div', { class: 'help' }, 'Fees included. Even under the limit the agent pays only bills you approved.'),
     form, lim.err, err);
@@ -427,7 +446,7 @@ function needsBlock() {
     first ? h('div', { class: 'first' },
       h('div', {},
         h('div', { class: 't' }, h('span', { class: 'dot' }), billName(first)),
-        h('div', { class: 's' }, `${zec(first.bill.amount)} ${c} · ${first.contact ? first.contact.local_name : 'an unknown recipient'}`)),
+        h('div', { class: 's' }, `${withUsd(`${zec(first.bill.amount)} ${c}`, first.bill.amount)} · ${first.contact ? first.contact.local_name : 'an unknown recipient'}`)),
       h('button', { class: 'pill accent', onclick: () => goApprove(first) }, 'Approve')) : null,
     first && overLimit(first) ? h('div', { class: 'note gap' }, 'Over the daily limit - raise it on the left') : null);
 }
@@ -436,8 +455,70 @@ function miniBill(b) {
   return h('div', { class: 'mini ln' },
     h('span', {}, statusLabel(b)),
     h('span', {}, h('span', { class: 'title' }, billName(b)), h('span', { class: 'who' }, payeeText(b))),
-    h('span', { class: 'mono' }, zec(b.bill.amount)),
+    h('span', { class: 'mono' }, zec(b.bill.amount), usdTag(b.bill.amount)),
     h('span', { class: 'r' }, state(b) === 'needs' ? h('button', { class: 'pill outline xs', onclick: () => goApprove(b) }, 'Approve') : null));
+}
+
+function usdTag(zat) {
+  const u = usd(zat);
+  return u ? h('span', { class: 'usd' }, u) : null;
+}
+
+// Turning USD amounts on starts a price request every 10 minutes; say so.
+function usdToggle(on) {
+  return act(async () => {
+    await api('POST', '/settings', { usd_prices: on });
+    await refresh();
+    if (on) setTimeout(() => refresh(true).catch(refreshFailed), 3000);
+  }, on
+    ? 'USD amounts on. The wallet asks Coinbase for the ZEC price every 10 minutes; Coinbase sees your IP address.'
+    : 'USD amounts off. The wallet no longer asks for the price.');
+}
+
+async function openTopup() {
+  ui.topup = 'loading';
+  render();
+  try {
+    const r = await api('POST', '/topup');
+    ui.topup = { address: r.address, qr: r.qr_svg };
+  } catch (e) {
+    ui.topup = null;
+    if (!e.login) flash('bad', sentence(e.message));
+  }
+  render();
+}
+
+// A fresh address and its QR code. Only the owner sees it; the agent never does.
+function topupPanel() {
+  const t = ui.topup;
+  const testnet = coin() !== 'ZEC';
+  if (t === 'loading') return h('div', { class: 'topup' }, h('div', { class: 'muted' }, 'Making a fresh address…'));
+  const copy = h('button', {
+    class: 'pill ink sm', type: 'button',
+    onclick: async () => {
+      try { await navigator.clipboard.writeText(t.address); } catch (_) {
+        flash('bad', 'Could not copy. Select the address and copy it by hand.');
+        return;
+      }
+      flash('ok', 'Address copied.');
+    },
+  }, 'Copy address');
+  return h('div', { class: 'topup' },
+    h('img', { class: 'qr', src: 'data:image/svg+xml;utf8,' + encodeURIComponent(t.qr), alt: 'QR code of the address', width: 200, height: 200 }),
+    h('div', {},
+      h('div', { class: 'eyebrow' }, testnet ? 'Top up · test coins only' : 'Top up · send ZEC to this address'),
+      h('div', { class: 'addr-big mono' }, t.address),
+      h('div', { class: 'controls' }, copy,
+        h('button', { class: 'pill ghost sm', type: 'button', onclick: openTopup }, 'New address'),
+        h('button', { class: 'link', type: 'button', onclick: () => { ui.topup = null; render(); } }, 'Close')),
+      h('ul', { class: 'steps' },
+        testnet
+          ? h('li', {}, 'Paste this address into a Zcash testnet faucet to get test coins (TAZ).')
+          : [h('li', {}, 'Send from a shielded Zcash wallet such as ZODL or Zingo, or swap into ZEC with NEAR Intents and paste this address as the recipient.'),
+            h('li', {}, 'Many exchanges cannot send to this kind of address (Orchard only). If yours refuses it, send to your own shielded wallet first.')],
+        h('li', {}, 'The money first shows as pending and becomes spendable after 10 confirmations, about 12 minutes.'),
+        h('li', {}, 'New address gives a fresh one each time, so payers cannot link your top-ups. Old addresses keep working.'),
+        h('li', {}, 'Only you see this address; the agent never does.'))));
 }
 
 function renderOverview() {
@@ -450,7 +531,14 @@ function renderOverview() {
     h('div', { class: 'hero' },
       h('div', { class: 'eyebrow' }, 'Balance · ready to spend'),
       h('div', { class: 'amount' }, h('b', {}, zec(o.balance ? o.balance.spendable : 0)), h('span', {}, c)),
+      o.usd ? h('div', { class: 'usdline' }, usd(o.balance ? o.balance.spendable : 0),
+        h('span', { class: 'faint' }, ` · 1 ZEC ${usd(1e8)}, ${o.usd.source} at ${clock(o.usd.at)}`))
+        : o.usd_on ? h('div', { class: 'usdline faint' }, 'USD amounts are on; waiting for the ZEC price.') : null,
       h('div', { class: 'sub' }, `${zec(o.balance ? o.balance.pending : 0)} ${c} pending confirmation`),
+      h('div', { class: 'hero-acts' },
+        h('button', { class: 'pill outline sm', onclick: ui.topup ? () => { ui.topup = null; render(); } : openTopup }, ui.topup ? 'Hide top up' : 'Top up'),
+        o.network === 'mainnet' && !o.usd_on ? h('button', { class: 'link', onclick: usdToggle(true) }, 'Show amounts in USD') : null),
+      ui.topup ? topupPanel() : null,
       o.paused ? h('div', { class: 'notice' }, 'Agent payments are stopped. Payments already sent keep confirming; this cannot recall them.') : null,
       !o.unlocked ? h('div', { class: 'notice' }, 'The wallet is locked: the agent cannot pay until you unlock it in Settings.') : null),
     h('div', { class: 'duo ruled' }, limitBlock(), needsBlock()),
@@ -473,7 +561,8 @@ function renderOverview() {
 function agentFields(view) {
   const rows = [];
   for (const [k, v] of Object.entries(view || {})) {
-    rows.push(h('span', {}, k.replace(/_/g, ' ')), h('span', {}, v && typeof v === 'object' && 'zec' in v ? `${v.zec}` : String(v)));
+    const shown = v && typeof v === 'object' && 'zec' in v ? (v.usd_approx ? `${v.zec} (≈ $${v.usd_approx})` : v.zec) : String(v);
+    rows.push(h('span', {}, k.replace(/_/g, ' ')), h('span', {}, shown));
   }
   return rows;
 }
@@ -542,7 +631,7 @@ function approveForm(b) {
   const pw = field('password', 'Wallet password', h('input', { class: 'u', type: 'password', autocomplete: 'current-password' }),
     { wide: true, empty: 'Type the wallet password to approve', hint: 'Needed for every approval, so the agent cannot approve anything itself.' });
   const err = errorLine();
-  const ok = h('button', { class: 'pill ink', type: 'submit' }, `Allow the agent to pay once: ${zec(b.bill.amount)} ${c}`);
+  const ok = h('button', { class: 'pill ink', type: 'submit' }, withUsd(`Allow the agent to pay once: ${zec(b.bill.amount)} ${c}`, b.bill.amount));
   const form = h('form', { class: 'approve', novalidate: true },
     label.el, contact.el, fee.el, hours.el, pw.el,
     h('div', { class: 'wide' }, err),
@@ -587,7 +676,7 @@ function billRow(b) {
       h('span', {}, statusLabel(b)),
       h('span', {}, h('span', { class: 'title' }, billName(b)), h('span', { class: 'who' }, payeeText(b))),
       h('span', { class: 'when' }, whenText(b)),
-      h('span', { class: 'r mono' }, zec(b.bill.amount)),
+      h('span', { class: 'r mono' }, zec(b.bill.amount), usdTag(b.bill.amount)),
       h('span', { class: 'acts' },
         s === 'needs' && ui.approving !== id ? h('button', { class: 'pill ink sm', onclick: () => { ui.approving = id; render(); } }, 'Approve') : null,
         s === 'approved' && b.approval ? h('button', {
@@ -614,7 +703,7 @@ function requestRow(r) {
       h('span', { class: m.state === 'paid' || m.state === 'overpaid' ? 'stat' : 'stat quiet' }, m.state.replace(/_/g, ' ')),
       h('span', {}, h('span', { class: 'title' }, r.request.label),
         h('span', { class: 'who' }, r.request.delivery === 'delivered_to_folder' ? 'delivered to the contact folder' : 'send the link to the payer yourself')),
-      h('span', { class: 'r mono' }, zec(r.request.amount)),
+      h('span', { class: 'r mono' }, zec(r.request.amount), usdTag(r.request.amount)),
       h('span', { class: 'r' }, h('button', { class: 'round', onclick: () => { if (open) ui.open.delete(id); else ui.open.add(id); render(); } }, open ? '−' : '+'))),
     open ? h('div', { class: 'panel' },
       h('div', {}, h('div', { class: 'k' }, 'Only you see'),
@@ -733,6 +822,13 @@ function renderSettings() {
             h('span', {}, ct.local_name), h('span', { class: 'mono muted' }, ct.alias), h('span', { class: 'muted' }, String(ct.addresses.length))))
             : h('div', { class: 'empty' }, 'No contacts yet.')),
         contactForm)),
+    h('div', { class: 'set three' }, h('b', {}, 'Amounts in USD'),
+      h('span', { class: 'muted' }, o.network === 'mainnet'
+        ? 'Approximate dollar amounts for you and the agent. While on, the wallet asks Coinbase (Kraken if Coinbase fails) for the ZEC price every 10 minutes, on a timer, never at payment time; they see your IP address. Bills, approvals and limits stay in ZEC.'
+        : 'Mainnet only: test coins have no price.'),
+      o.network === 'mainnet'
+        ? h('button', { class: o.usd_on ? 'pill ghost' : 'pill ink', onclick: usdToggle(!o.usd_on) }, o.usd_on ? 'Turn off' : 'Turn on')
+        : h('span', {})),
     h('div', { class: 'set three' }, h('b', {}, 'Lock wallet'),
       h('span', { class: 'muted' }, 'Clears the spending key from memory. No payments until you unlock.'),
       o.unlocked
