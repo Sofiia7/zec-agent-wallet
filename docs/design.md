@@ -86,3 +86,20 @@ Incoming payments for a request are matched by the request's own address, not by
 ## Not in the first version
 
 Sapling and pool migration, transparent addresses, multi-recipient payment links, budgets per contact, signed invoices, recurring payments, USD-denominated approvals, encrypted metadata backup, Tor, multiple accounts, hardware wallets, mobile.
+
+## Next
+
+Not built. This is how the next two features fit the model above.
+
+**Autopilot limit.** The owner sets a cap per bill and per day. A bill that fits is approved by the daemon instead of the owner: the same single-use snapshot, marked as approved by rule in the activity log and the owner window. The rule is authenticated like an approval, so editing the database cannot raise it, and the existing daily limit stays the hard ceiling, reserved atomically with each payment. The cost is stated up front: bills can come from anyone who knows an address, so a misled agent can spend up to the daily cap on bills the owner never saw. Off by default.
+
+**Bills in other coins.** A bill asking for an asset on another chain (for example USDC on Base) is paid from the shielded balance through a NEAR Intents swap:
+
+1. The daemon asks the swap service for a quote: the ZEC amount, a deposit address, what the recipient gets and a deadline, with one of the wallet's own addresses for refunds.
+2. The approval snapshot covers the quote: deposit address, ZEC amount, destination chain, asset, amount and recipient, refund address, and an expiry no later than the quote's deadline.
+3. The agent pays it like any bill: one ZEC payment, once. The swap service converts, bridges and delivers, so the agent needs no gas tokens and no balances on other chains.
+4. A new final state, `refunded`, covers a swap that did not complete.
+
+The model sees the asset, the amount and the contact alias ("50 USDC to Studio"); the destination and deposit addresses stay owner-only, like Zcash addresses. Who paid stays hidden; the payout is as public as any transfer on that chain. Addresses on those chains are reusable, so a per-recipient allowance ("this address, up to $20 a day") becomes possible there, which fresh diversified Zcash addresses rule out.
+
+Open before building: whether the swap's ZEC deposit address is transparent (the wallet sends to Orchard only), how far the swap service is trusted for delivery and refunds, quotes that expire before the owner answers (autopilot or a fresh quote), and testing that likely needs mainnet funds.

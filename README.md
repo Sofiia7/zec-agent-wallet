@@ -29,6 +29,15 @@ Once on mainnet (26 Oct 2026): the same flow between two wallets, with the payer
 
 See [docs/design.md](docs/design.md) for the approval model, failure handling and threat model.
 
+## Next (not built yet)
+
+The first version keeps the owner in the loop for every new bill. Two features would let an agent work on its own:
+
+- **Autopilot limit.** The owner sets a cap per bill and per day; inside it the agent pays without asking. The daily limit already exists and is reserved atomically with each payment; what is missing is approval by rule instead of by click. The trade-off is stated up front: anyone who knows an address can send a bill, so a misled agent can spend up to the daily cap.
+- **Paying in other coins from the shielded balance.** A bill in USDC or ETH on another chain would be paid through a NEAR Intents swap: the daemon gets a quote (ZEC amount, deposit address, expiry), the owner approves that quote or it fits the autopilot limit, and the agent pays it as one ZEC payment. The swap service converts, bridges and delivers, so the agent holds no gas tokens and no balances on other chains. Who paid stays hidden; the payout is as public as any transfer on that chain. Addresses there are reusable, so a per-recipient allowance ("this address, up to $20 a day") becomes possible, which fresh Zcash addresses rule out today.
+
+Open before building: whether the swap's ZEC deposit address is transparent (the wallet sends to Orchard only), refunds when a swap fails, quotes that expire before the owner answers, and testing that likely needs mainnet funds. Details in [docs/design.md](docs/design.md#next).
+
 ## Build
 
 Requires Rust 1.98.1 (pinned in `rust-toolchain.toml`). No `protoc` needed.
